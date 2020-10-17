@@ -10,5 +10,5 @@ import (
 func main() {
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
-	sip.ListenAndServe("0.0.0.0:5060", nil)
+	sip.ListenAndServe("", nil)
 }
