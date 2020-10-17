@@ -1,13 +1,14 @@
 package main
 
 import (
-	"github.com/tj8000rpm/tjsip/sip"
+	//"github.com/tj8000rpm/tjsip/sip"
 	"log"
+	"os"
+	"sip/sip"
 )
 
 func main() {
-	recieveBufSizeB = 9000
+	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
-	done := tjsip.Serve("0.0.0.0", 5060)
-	<-done
+	sip.ListenAndServe("0.0.0.0:5060", nil)
 }

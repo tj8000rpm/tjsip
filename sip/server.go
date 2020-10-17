@@ -1,17 +1,40 @@
 package sip
 
 import (
-	"fmt"
-	//"context"
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
-	"os"
+	"net/http"
 	"sync"
-	//"time"
+	"sync/atomic"
+	"time"
 )
+
+var (
+	ServerContextKey = &contextKey{"sip-server"}
+	RecieveBufSizeB  = 9000
+)
+
+type atomicBool int32
+
+func (b *atomicBool) isSet() bool { return atomic.LoadInt32((*int32)(b)) != 0 }
+func (b *atomicBool) setTrue()    { atomic.StoreInt32((*int32)(b), 1) }
+func (b *atomicBool) setFalse()   { atomic.StoreInt32((*int32)(b), 0) }
+
+type Handler interface {
+	ServerSIP(ResponseWriter, *Request)
+}
+
+type ResponseWriter interface {
+	Header() http.Header
+	Write([]byte) (int, error)
+	WriteHeader(statusCode int)
+}
 
 type Server struct {
 	// Addr optionally specifies the TCP address for the server to listen on,
@@ -85,6 +108,8 @@ type Server struct {
 	// If nil, logging is done via the log package's standard logger.
 	ErrorLog *log.Logger
 
+	inShutdown atomicBool // true when when server is in shutdown
+
 	mu sync.Mutex
 	//listeners  map[*net.Listener]struct{}
 	//activeConn map[*conn]struct{}
@@ -92,12 +117,12 @@ type Server struct {
 	onShutdown []func()
 }
 
-var recieveBufSizeB int
-
-type RecieveBufs struct {
-	Addr *net.UDPAddr
-	Size int
-	Buf  []byte
+func (s *Server) logf(format string, args ...interface{}) {
+	if s.ErrorLog != nil {
+		s.ErrorLog.Printf(format, args...)
+	} else {
+		log.Printf(format, args...)
+	}
 }
 
 func (*Server) checkTransport(Addr *net.UDPAddr) {
@@ -108,16 +133,15 @@ func (*Server) newBufioReader(r io.Reader) *bufio.Reader {
 	return bufio.NewReader(r)
 }
 
-func (srv *Server) packetProcessing(done <-chan interface{}, queue *RecieveBufs, wg *sync.WaitGroup) {
-	defer (*wg).Done()
+func (srv *Server) packetProcessing(ctx context.Context, buf []byte, size int, addr *net.UDPAddr) {
 
-	srv.checkTransport(queue.Addr)
-	bufr := srv.newBufioReader(bytes.NewReader(queue.Buf[:queue.Size]))
+	srv.checkTransport(addr)
+	bufr := srv.newBufioReader(bytes.NewReader(buf[:size]))
 	req, err := ReadRequest(bufr)
 	if err == nil {
 		// log.Printf("msg: %v", req)
 
-		req.RemoteAddr = fmt.Sprintf("%v", queue.Addr)
+		req.RemoteAddr = fmt.Sprintf("%v", addr)
 		log.Printf("remoteAddr: %v", req.RemoteAddr)
 		log.Printf("URI: %v", req.RequestURI)
 		// log.Printf("url: %v", req.URL)
@@ -134,63 +158,112 @@ func (srv *Server) packetProcessing(done <-chan interface{}, queue *RecieveBufs,
 		//	}
 		//}
 	}
+	_ = ctx
 	//log.Printf("From: %v Reciving data: %s", queue.Addr.String(), sipMessage.RawMessage)
 	//:= make(chan interface{})
 }
 
-func (srv *Server) recieveQueues(done <-chan interface{}, queue <-chan RecieveBufs) {
-	var recieveBuf RecieveBufs
-	var wg sync.WaitGroup
-loop:
-	for {
-		select {
-		case recieveBuf = <-queue:
-			// check udp layer filtering
-			//log.Printf("From: %v Reciving data: %s", recieveBuf.Addr.String(), string(recieveBuf.Buf[:recieveBuf.Size]))
-			wg.Add(1)
-			go srv.packetProcessing(done, &recieveBuf, &wg)
-		case <-done:
-			log.Printf("Interupt break")
-			break loop
-		}
-	}
-	wg.Wait()
+func (s *Server) getDoneChan() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getDoneChanLocked()
 }
 
-func (*Server) Serve(listenHost string, listenPort int) <-chan interface{} {
+func (s *Server) getDoneChanLocked() chan struct{} {
+	if s.doneChan == nil {
+		s.doneChan = make(chan struct{})
+	}
+	return s.doneChan
+}
 
+func (s *Server) closeDoneChanLocked() {
+	ch := s.getDoneChanLocked()
+	select {
+	case <-ch:
+		// Already closed. Don't close again.
+	default:
+		// Safe to close here. We're the only closer, guarded
+		// by s.mu.
+		close(ch)
+	}
+}
+
+func (srv *Server) Serve(udpLn *net.UDPConn) error {
 	srv.doneChan = make(chan struct{})
+	defer udpLn.Close()
 
-	go func() {
-		udpAddr := &net.UDPAddr{
-			IP:   net.ParseIP(listenHost),
-			Port: listenPort,
-		}
+	baseCtx := context.Background()
+	ctx := context.WithValue(baseCtx, ServerContextKey, srv)
 
-		udpLn, err := net.ListenUDP("udp", udpAddr)
+	var tempDelay time.Duration // how long to sleep on accept failure
+
+	buf := make([]byte, RecieveBufSizeB)
+
+	for {
+		n, addr, err := udpLn.ReadFromUDP(buf)
 		if err != nil {
-			log.Fatalln(err)
-		}
-		defer log.Println("UDP Server has been stoped")
-		defer udpLn.Close()
-
-		buf := make([]byte, recieveBufSizeB)
-		log.Println("Starting UDP Server...")
-
-		recieveQueue := make(chan RecieveBufs)
-
-		go srv.recieveQueues(doneChan, recieveQueue)
-
-		for {
-			n, addr, err := udpLn.ReadFromUDP(buf)
-			if err != nil {
-				log.Fatalln(err)
-				break
+			select {
+			case <-srv.getDoneChan():
+				return ErrServerClosed
+			default:
 			}
-			recieveBuf := RecieveBufs{Addr: addr, Size: n, Buf: buf}
-			recieveQueue <- recieveBuf
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				srv.logf("sip: Accept error: %v; retrying in %v", err, tempDelay)
+				time.Sleep(tempDelay)
+				continue
+			}
+			return err
 		}
-	}()
+		connCtx := ctx
+		tempDelay = 0
+		go srv.packetProcessing(connCtx, buf, n, addr)
+	}
 
-	return doneChan
+	return nil
+}
+
+func (srv *Server) ListenAndServe() error {
+	if srv.shuttingDown() {
+		return ErrServerClosed
+	}
+
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":sip"
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		log.Fatalln(err)
+		return ErrServerClosed
+	}
+
+	ln, err := net.ListenUDP("udp", udpAddr)
+	defer log.Println("UDP Server has been stoped")
+	if err != nil {
+		return err
+	}
+	log.Println("Starting UDP Server...")
+	return srv.Serve(ln)
+}
+
+func (s *Server) shuttingDown() bool {
+	return s.inShutdown.isSet()
+}
+
+// ErrServerClosed is returned by the Server's Serve, ServeTLS, ListenAndServe,
+// and ListenAndServeTLS methods after a call to Shutdown or Close.
+var ErrServerClosed = errors.New("sip: Server closed")
+
+func ListenAndServe(addr string, handler Handler) error {
+	server := &Server{Addr: addr, Handler: handler}
+	return server.ListenAndServe()
 }
