@@ -6,6 +6,34 @@ import (
 	"unicode/utf8"
 )
 
+const (
+	StageTransport = iota
+	StageIngress
+	StageEgress
+)
+
+const (
+	CallInit = iota
+	CallSetup
+	CallEstablished
+	CallReleasing
+	CallReleased
+)
+
+const (
+	LogCritical = iota
+	LogError
+	LogWarn
+	LogInfo
+	LogDebug
+)
+
+var LogLevel = LogWarn
+
+func IsCallEstablished(callStatus int) bool {
+	return callStatus >= CallEstablished
+}
+
 // contextKey is a value for use with context.WithValue. It's used as
 // a pointer so it fits in an interface{} without allocation.
 type contextKey struct {
