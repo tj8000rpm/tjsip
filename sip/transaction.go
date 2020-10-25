@@ -28,6 +28,7 @@ const (
 	TransactionStateCompleted
 	TransactionStateConfirmed
 	TransactionStateTerminated
+	TransactionStateClosed
 )
 
 var (
@@ -85,6 +86,8 @@ type ServerTransaction struct {
 }
 
 func (t *ServerTransaction) Handle(req *Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if (t.State == TransactionStateCompleted || t.State == TransactionStateConfirmed) &&
 		req.Method == "ACK" {
 		t.Server.Debugf("ACK Recived")
@@ -187,7 +190,9 @@ func (t *ServerTransaction) inviteController() {
 		t.Server.Debugf("[%v] Sent 100 Trying", t.Key)
 		provRes := t.request.GenerateResponseFromRequest()
 		t.Server.WriteMessage(provRes)
+		t.mu.Lock()
 		t.provisionalRes = provRes
+		t.mu.Unlock()
 	case msg := <-t.tuChan:
 		if msg == nil {
 			return
@@ -201,16 +206,22 @@ func (t *ServerTransaction) inviteController() {
 		if msg.StatusCode > 100 && msg.StatusCode < 200 {
 			// transmit response state will conitunue
 			t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
+			t.mu.Lock()
 			t.provisionalRes = msg
+			t.mu.Unlock()
 		} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
 			// transmit response and state to Terminated
 			t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
+			t.mu.Lock()
 			t.finalRes = msg
+			t.mu.Unlock()
 			t.controllerTerminated()
 			return
 		} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
 			t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
+			t.mu.Lock()
 			t.finalRes = msg
+			t.mu.Unlock()
 			t.inviteControllerCompleted()
 			return
 		}
@@ -238,16 +249,22 @@ func (t *ServerTransaction) inviteController() {
 			if msg.StatusCode > 100 && msg.StatusCode < 200 {
 				// transmit response state will conitunue
 				t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
+				t.mu.Lock()
 				t.provisionalRes = msg
+				t.mu.Unlock()
 			} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
 				// transmit response and state to Terminated
 				t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
+				t.mu.Lock()
 				t.finalRes = msg
+				t.mu.Unlock()
 				t.controllerTerminated()
 				return
 			} else if msg.StatusCode >= 300 && msg.StatusCode <= 600 {
 				t.Server.Debugf("[%v] Transmit final response(NOT 2xx) from TU", t.Key)
 				t.finalRes = msg
+				t.mu.Lock()
+				t.mu.Unlock()
 				t.inviteControllerCompleted()
 				return
 			} else {
@@ -350,7 +367,12 @@ func (t *ServerTransaction) Controller() {
 func (t *ServerTransaction) Destroy() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.Server.Debugf("Transaction was destroyed")
+	if t.State == TransactionStateClosed {
+		t.Server.Debugf("[%v] transaction already closed", t.Key)
+		return
+	}
+	t.State = TransactionStateClosed
+	t.Server.Debugf("[%v] Transaction was destroyed", t.Key)
 	close(t.delChan)
 	close(t.tuChan)
 	t.Server.DeleteServerTransaction(t)

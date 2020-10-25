@@ -24,41 +24,55 @@ type callGapControl struct {
 	restrictedcall int
 }
 
+type callStat struct {
+	mu                   sync.Mutex
+	completed            int
+	completedPerResponse [700]int
+}
+
+func (stat *callStat) Increment(response int) {
+	stat.mu.Lock()
+	defer stat.mu.Unlock()
+	stat.completed++
+	stat.completedPerResponse[response] += 1
+}
+
+var stat = callStat{
+	//completedPerResponse: make(map[int]int),
+}
+
 var callGap = callGapControl{enable: false, last: time.Now()}
 
+func myHandlerRedirect(srv *sip.Server, msg *sip.Message, trans *sip.ServerTransaction) error {
+	rep := msg.GenerateResponseFromRequest()
+	rep.AddToTag()
+
+	rep.StatusCode = 300
+	rep.Header.Set("Contact", "<sip:0312341234@example.com>")
+	trans.WriteMessage(rep)
+	stat.Increment(300)
+
+	return nil
+}
+
 func myHandlerInvite(srv *sip.Server, msg *sip.Message, trans *sip.ServerTransaction) error {
-	time.Sleep(time.Millisecond * 100)
 	rep := msg.GenerateResponseFromRequest()
 
-	/*/
 	rep.StatusCode = 180
-	rep.Status = "180 Ringing"
 	rep.AddToTag()
 	trans.WriteMessage(rep)
-	// fmt.Println("Ringing!!!")
 	time.Sleep(time.Millisecond * 1000)
 	rep.StatusCode = 183
-	rep.Status = "183 Session Progess"
 	trans.WriteMessage(rep)
-	// fmt.Println("Progress!!!!!")
 	time.Sleep(time.Second * 3)
 	rep.StatusCode = 200
-	rep.Status = "200 OK"
 	trans.WriteMessage(rep)
-
-	/**/
-	time.Sleep(time.Second * 3)
-	rep.StatusCode = 300
-	rep.Status = "300 Multiple Choices"
-	trans.WriteMessage(rep)
-	/**/
+	stat.Increment(200)
 
 	return nil
 }
 
 func myHandlerNonInvite(srv *sip.Server, msg *sip.Message, trans *sip.ServerTransaction) error {
-	// log.Printf("Non Invite Message was Recieved\n")
-	// log.Printf("!-!-!-!-!-!-!-!\n%v\n!-!-!-!-!-!-!-!", msg)
 	if msg.Request && msg.Method == "ACK" {
 		srv.Debugf("Dialog was established\n")
 		return nil
@@ -71,13 +85,10 @@ func myHandlerNonInvite(srv *sip.Server, msg *sip.Message, trans *sip.ServerTran
 	}
 	rep := msg.GenerateResponseFromRequest()
 	rep.StatusCode = 200
-	rep.Status = "200 OK"
 	trans.WriteMessage(rep)
-	// fmt.Println("OK!!!!")
 	return nil
 }
-
-func myhandler(layer int, srv *sip.Server, msg *sip.Message) error {
+func myHandler(layer int, srv *sip.Server, msg *sip.Message) error {
 	// remoteAddr, err := net.ResolveUDPAddr("udp", req.RemoteAddr)
 	// remoteIPStr := remoteAddr.IP.String()
 
@@ -112,29 +123,36 @@ func myhandler(layer int, srv *sip.Server, msg *sip.Message) error {
 			}
 		*/
 		return nil
-	} else if layer == sip.LayerCore {
-		// log.Printf("ORIG: cllled in SIP Core\n")
-		if msg.Request {
-			key, err := sip.GenerateServerTransactionKey(msg)
+	}
+	return nil
+}
+
+func mySipCoreHandler(layer int, srv *sip.Server, msg *sip.Message) error {
+	if layer != sip.LayerCore {
+		return nil
+	}
+	if msg.Request {
+		key, err := sip.GenerateServerTransactionKey(msg)
+		if err != nil {
+			return err
+		}
+		var newTransaction *sip.ServerTransaction
+
+		if msg.Method == "INVITE" {
+			newTransaction = sip.NewServerInviteTransaction(srv, key, msg)
+			err := srv.AddServerTransaction(msg, newTransaction)
 			if err != nil {
+				srv.Warnf("%v", err)
+				newTransaction.Destroy()
 				return err
 			}
-			var newTransaction *sip.ServerTransaction
-
-			if msg.Method == "INVITE" {
-				newTransaction = sip.NewServerInviteTransaction(srv, key, msg)
-				err := srv.AddServerTransaction(msg, newTransaction)
-				if err != nil {
-					srv.Warnf("%v", err)
-					newTransaction.Destroy()
-					return err
-				}
-				return myHandlerInvite(srv, msg, newTransaction)
-			} else {
-				newTransaction = sip.NewServerNonInviteTransaction(srv, key, msg)
-				return myHandlerNonInvite(srv, msg, newTransaction)
+			if msg.RemoteAddr == "127.0.0.1:5062" {
+				return myHandlerRedirect(srv, msg, newTransaction)
 			}
-			return nil
+			return myHandlerInvite(srv, msg, newTransaction)
+		} else {
+			newTransaction = sip.NewServerNonInviteTransaction(srv, key, msg)
+			return myHandlerNonInvite(srv, msg, newTransaction)
 		}
 		return nil
 	}
@@ -145,28 +163,26 @@ func main() {
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
 	sip.LogLevel = sip.LogDebug
-	//sip.LogLevel = sip.LogInfo
+	sip.LogLevel = sip.LogInfo
 	go func() {
-		time.Sleep(time.Second * 5)
-		callGap.mu.Lock()
-		defer callGap.mu.Unlock()
-
-		log.Println("call restricted")
-		callGap.enable = true
-		callGap.duration = time.Second * 1
-	}()
-	go func() {
-		time.Sleep(time.Second * 30)
-		callGap.mu.Lock()
-		defer callGap.mu.Unlock()
-
-		callGap.enable = false
+		for {
+			time.Sleep(time.Second * 5)
+			stat.mu.Lock()
+			log.Printf("Call completed: %v\n", stat.completed)
+			for idx, val := range stat.completedPerResponse {
+				if val == 0 {
+					continue
+				}
+				log.Printf("Call completed[%03d]: %v\n", idx, val)
+			}
+			stat.mu.Unlock()
+		}
 	}()
 
 	// sip.Timer100Try = 0 * time.Second
 
 	//sip.HandleFunc(sip.LayerSocket, "odd test", myhandler)
 	//sip.HandleFunc(sip.LayerParser, "odd test", myhandler)
-	sip.HandleFunc(sip.LayerCore, "odd test", myhandler)
+	sip.HandleFunc(sip.LayerCore, "odd test", mySipCoreHandler)
 	sip.ListenAndServe("", nil)
 }

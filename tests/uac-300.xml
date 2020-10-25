@@ -26,7 +26,7 @@
     <![CDATA[
 
       INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
-      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
       Via: SIP/2.0/UDP 10.9.0.1:5060;branch=z9hG4bK187-123412-34
       From: sipp <sip:sipp@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
       To: [service] <sip:[service]@[remote_ip]:[remote_port]>
@@ -68,7 +68,6 @@
 
       ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
       [last_Via:]
-      Via: SIP/2.0/UDP 10.9.0.1:5060;branch=z9hG4bK187-123412-34
       From: sipp <sip:sipp@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
       To: [service] <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
       Call-ID: [call_id]
@@ -80,13 +79,13 @@
 
     ]]>
   </send>
+  <!--
   <pause illiseconds=500/>
   <send>
     <![CDATA[
 
       ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
       [last_Via:]
-      Via: SIP/2.0/UDP 10.9.0.1:5060;branch=z9hG4bK187-123412-34
       From: sipp <sip:sipp@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
       To: [service] <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
       Call-ID: [call_id]
@@ -98,6 +97,7 @@
 
     ]]>
   </send>
+      -->
 
   <!-- definition of the response time repartition table (unit is ms)   -->
   <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200"/>

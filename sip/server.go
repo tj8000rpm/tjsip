@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -359,8 +358,6 @@ func (s *Server) closeDoneChanLocked() {
 }
 
 func (srv *Server) WriteMessage(sentMsg *Message) error {
-	srv.Debugf("recieve message to queue")
-	//srv.sentQueue <- msg
 	srv.Debugf("Sent message to queue")
 	w := new(bytes.Buffer)
 	sentMsg.Write(w)
@@ -390,33 +387,6 @@ func (srv *Server) Serve(udpLn *net.UDPConn) error {
 	var tempDelay time.Duration // how long to sleep on accept failure
 
 	buf := make([]byte, RecieveBufSizeB)
-
-	/*
-		go func() error {
-			for {
-				select {
-				case <-srv.getDoneChan():
-					return ErrServerClosed
-				case sentMsg := <-srv.sentQueue:
-					srv.Debugf("sent message: %v", sentMsg)
-					go func() {
-						w := new(bytes.Buffer)
-						sentMsg.Write(w)
-						srv.Debugf("msg-------\n%v\n", w)
-						udpAddr, err := net.ResolveUDPAddr("udp", sentMsg.RemoteAddr)
-						if err != nil {
-							// Error ignore sent message
-						}
-						_, err = udpLn.WriteTo(w.Bytes(), udpAddr)
-						if err != nil {
-							// will raise transport error to TU
-						}
-						srv.Debugf("sent message done")
-					}()
-				}
-			}
-		}()
-	*/
 
 	for {
 		n, addr, err := udpLn.ReadFromUDP(buf)
@@ -638,125 +608,4 @@ type HandlerFunc func(int, *Server, *Message) error
 // ServeSIP calls f(layer, m).
 func (f HandlerFunc) ServeSIP(layer int, s *Server, m *Message) error {
 	return f(layer, s, m)
-}
-
-// -----------------------------------------------------
-// About response and ResponseWriter
-// -----------------------------------------------------
-/*
-type response struct {
-	req         *Message // request for this response
-	reqBody     io.ReadCloser
-	cancelCtx   context.CancelFunc // when ServeHTTP exits
-	wroteHeader bool               // reply header has been (logically) written
-
-	w *bufio.Writer // buffers output in chunks to chunkWriter
-
-	// handlerHeader is the Header that Handlers get access to,
-	// which may be retained and mutated even after WriteHeader.
-	// handlerHeader is copied into cw.header at WriteHeader
-	// time, and privately mutated thereafter.
-	handlerHeader http.Header
-	calledHeader  bool // handler accessed handlerHeader via Header
-
-	written       int64 // number of bytes written in body
-	contentLength int64 // explicitly-declared Content-Length; or -1
-	status        int   // status code passed to WriteHeader
-
-	// requestBodyLimitHit is set by requestTooLarge when
-	// maxBytesReader hits its max size. It is checked in
-	// WriteHeader, to make sure we don't consume the
-	// remaining request body to try to advance to the next HTTP
-	// request. Instead, when this is set, we stop reading
-	// subsequent requests on this connection and stop reading
-	// input from it.
-	requestBodyLimitHit bool
-
-	// trailers are the headers to be sent after the handler
-	// finishes writing the body. This field is initialized from
-	// the Trailer response header when the response header is
-	// written.
-	trailers []string
-
-	handlerDone atomicBool // set true when the handler exits
-
-	// Buffers for Date, Content-Length, and status code
-	dateBuf   [len(TimeFormat)]byte
-	clenBuf   [10]byte
-	statusBuf [3]byte
-
-	// closeNotifyCh is the channel returned by CloseNotify.
-	// TODO(bradfitz): this is currently (for Go 1.8) always
-	// non-nil. Make this lazily-created again as it used to be?
-	closeNotifyCh  chan bool
-	didCloseNotify int32 // atomic (only 0->1 winner should send)
-}
-
-func (w *response) WriteHeader(code int) {
-	if w.conn.hijacked() {
-		caller := relevantCaller()
-		w.conn.server.logf("http: response.WriteHeader on hijacked connection from %s (%s:%d)", caller.Function, path.Base(caller.File), caller.Line)
-		return
-	}
-	if w.wroteHeader {
-		caller := relevantCaller()
-		w.conn.server.logf("http: superfluous response.WriteHeader call from %s (%s:%d)", caller.Function, path.Base(caller.File), caller.Line)
-		return
-	}
-	checkWriteHeaderCode(code)
-	w.wroteHeader = true
-	w.status = code
-
-	if w.calledHeader && w.cw.header == nil {
-		w.cw.header = w.handlerHeader.Clone()
-	}
-
-	if cl := w.handlerHeader.get("Content-Length"); cl != "" {
-		v, err := strconv.ParseInt(cl, 10, 64)
-		if err == nil && v >= 0 {
-			w.contentLength = v
-		} else {
-			w.conn.server.logf("http: invalid Content-Length of %q", cl)
-			w.handlerHeader.Del("Content-Length")
-		}
-	}
-}
-
-func (w *response) Write(data []byte) (n int, err error) {
-	return w.write(len(data), data, "")
-}
-
-func (w *response) WriteString(data string) (n int, err error) {
-	return w.write(len(data), nil, data)
-}
-
-// either dataB or dataS is non-zero.
-func (w *response) write(lenData int, dataB []byte, dataS string) (n int, err error) {
-
-	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
-	}
-	if lenData == 0 {
-		return 0, nil
-	}
-	if !w.bodyAllowed() {
-		return 0, http.ErrBodyNotAllowed
-	}
-
-	w.written += int64(lenData) // ignoring errors, for errorKludge
-	if w.contentLength != -1 && w.written > w.contentLength {
-		return 0, http.ErrContentLength
-	}
-	if dataB != nil {
-		return w.w.Write(dataB)
-	} else {
-		return w.w.WriteString(dataS)
-	}
-}
-*/
-
-type ResponseWriter interface {
-	Header() http.Header
-	Write([]byte) (int, error)
-	WriteHeader(statusCode int)
 }

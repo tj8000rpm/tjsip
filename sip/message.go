@@ -4,7 +4,6 @@
 
 // HTTP Request reading and parsing.
 
-//package http
 package sip
 
 import (
@@ -17,9 +16,9 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	urlpkg "net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,16 +81,6 @@ var (
 
 func badStringError(what, val string) error { return fmt.Errorf("%s %q", what, val) }
 
-// Headers that Request.Write handles itself and should be skipped.
-var reqWriteExcludeHeader = map[string]bool{
-	"From":           true, // not in Header map anyway
-	"To":             true,
-	"CSeq":           true,
-	"Call-ID":        true,
-	"Content-Length": true,
-	"Trailer":        true,
-}
-
 var responseMandatoryHeaders = []string{
 	"From",
 	"Call-ID",
@@ -113,9 +102,10 @@ type Message struct {
 	URL     *url.URL
 
 	// Sepcified for SIP Response
-	Response   bool
-	Status     string // e.g. "200 OK"
-	StatusCode int    // e.g. 200
+	Response bool
+	// Status       string // e.g. "200 OK"
+	StatusCode   int // e.g. 200
+	ReasonPhrase string
 
 	Proto      string // "SIP/2.0"
 	ProtoMajor int    // 2
@@ -247,14 +237,40 @@ func (r *Message) Write(w io.Writer) error {
 }
 
 func (r *Message) writeResponse(w io.Writer) (err error) {
-	text := strings.Trim(strings.Trim(r.Status, " "), fmt.Sprintf("%03d", r.StatusCode))
-	text = strings.Trim(text, " ")
+
+	text := r.ReasonPhrase
+	if text == "" {
+		var ok bool
+		text, ok = statusText[r.StatusCode]
+		if !ok {
+			text = "Unknown"
+		}
+	}
 	if _, err := fmt.Fprintf(w, "SIP/%d.%d %03d %s\r\n",
 		r.ProtoMajor, r.ProtoMinor, r.StatusCode, text); err != nil {
 		return err
 	}
-	for key, header := range r.Header {
+
+	keys := make([]string, len(r.Header))
+	idx := 0
+	for key, _ := range r.Header {
+		keys[idx] = key
+		idx++
+	}
+	sort.Strings(keys)
+
+	//for key, header := range r.Header {
+	for _, key := range keys {
+		header := r.Header[key]
 		for _, value := range header {
+			switch key {
+			case "Cseq":
+				key = "CSeq"
+				break
+			case "Call-Id":
+				key = "Call-ID"
+				break
+			}
 			fmt.Fprintf(w, "%v: %v\r\n", key, value)
 		}
 
@@ -279,75 +295,6 @@ func (r *Message) write(w io.Writer) (err error) {
 		return r.writeResponse(w)
 	}
 	return nil
-	/*
-		// Process Body,ContentLength,Close,Trailer
-		tw, err := newTransferWriter(r)
-		if err != nil {
-			return err
-		}
-		err = tw.writeHeader(w, trace)
-		if err != nil {
-			return err
-		}
-
-		err = r.Header.writeSubset(w, reqWriteExcludeHeader, trace)
-		if err != nil {
-			return err
-		}
-
-		if extraHeaders != nil {
-			err = extraHeaders.write(w, trace)
-			if err != nil {
-				return err
-			}
-		}
-
-		_, err = io.WriteString(w, "\r\n")
-		if err != nil {
-			return err
-		}
-
-		if trace != nil && trace.WroteHeaders != nil {
-			trace.WroteHeaders()
-		}
-
-		// Flush and wait for 100-continue if expected.
-		if waitForContinue != nil {
-			if bw, ok := w.(*bufio.Writer); ok {
-				err = bw.Flush()
-				if err != nil {
-					return err
-				}
-			}
-			if trace != nil && trace.Wait100Continue != nil {
-				trace.Wait100Continue()
-			}
-			if !waitForContinue() {
-				r.closeBody()
-				return nil
-			}
-		}
-
-		if bw, ok := w.(*bufio.Writer); ok && tw.FlushHeaders {
-			if err := bw.Flush(); err != nil {
-				return err
-			}
-		}
-
-		// Write body and trailer
-		err = tw.writeBody(w)
-		if err != nil {
-			if tw.bodyReadError == err {
-				err = requestBodyReadError{err}
-			}
-			return err
-		}
-
-		if bw != nil {
-			return bw.Flush()
-		}
-		return nil
-	*/
 }
 
 // requestBodyReadError wraps an error from (*Message).write to indicate
@@ -588,16 +535,19 @@ func parseRequestLine(line string) (method, requestURI, proto string, ok bool) {
 
 var textprotoReaderPool sync.Pool
 
-func newTextprotoReader(br *bufio.Reader) *textproto.Reader {
+func newTextprotoReader(br *bufio.Reader) *Reader {
 	if v := textprotoReaderPool.Get(); v != nil {
-		tr := v.(*textproto.Reader)
+		//tr := v.(*textproto.Reader)
+		tr := v.(*Reader)
 		tr.R = br
 		return tr
 	}
-	return textproto.NewReader(br)
+	//return textproto.NewReader(br)
+	return NewReader(br)
 }
 
-func putTextprotoReader(r *textproto.Reader) {
+//func putTextprotoReader(r *textproto.Reader) {
+func putTextprotoReader(r *Reader) {
 	r.R = nil
 	textprotoReaderPool.Put(r)
 }
@@ -664,7 +614,8 @@ func readMessage(msg *Message, b *bufio.Reader) (err error) {
 		if msg.ProtoMajor, msg.ProtoMinor, ok = ParseSIPVersion(msg.Proto); !ok {
 			return badStringError("malformed SIP version", msg.Proto)
 		}
-		msg.Status = strings.TrimLeft(firstLine2+" "+firstLine3, " ")
+		// status := strings.TrimLeft(firstLine2+" "+firstLine3, " ")
+		msg.ReasonPhrase = firstLine3
 		statusCode := firstLine2
 		if len(statusCode) != 3 {
 			return badStringError("malformed SIP status code", statusCode)
@@ -694,8 +645,7 @@ func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
 	resp.Response = true
 	resp.Request = false
 
-	resp.StatusCode = 100
-	//resp.Status = "100 Trying"
+	resp.StatusCode = StatusTrying
 
 	resp.Proto = "SIP/2.0"
 	resp.ProtoMajor = 2
@@ -726,7 +676,10 @@ func (msg *Message) addTag(headerkey string) error {
 			return nil
 		}
 	}
-	generatedTag := "12314159"
+	generatedTag, err := GenerateRandomString(15)
+	if err != nil {
+		return err
+	}
 	msg.Header.Set(headerkey, to+";tag="+generatedTag)
 
 	return nil
@@ -765,81 +718,14 @@ func ViaParser(s string) (proto, sentBy string, via_params map[string]string, er
 }
 
 func (msg *Message) GetTopMostVia() (proto, sentBy string, params map[string]string, err error) {
-	viaHeaders := msg.Header["Via"]
-	err = nil
-	if len(viaHeaders) < 1 {
+	topmostvia := msg.Header.Get("Via")
+	if topmostvia == "" {
 		return "", "", nil, ErrMissingMandatoryHeader
 	}
-	topmostvia := viaHeaders[0]
+	topmostvia = strings.Split(topmostvia, ",")[0]
 
 	return ViaParser(topmostvia)
 }
-
-/*
-// MaxBytesReader is similar to io.LimitReader but is intended for
-// limiting the size of incoming request bodies. In contrast to
-// io.LimitReader, MaxBytesReader's result is a ReadCloser, returns a
-// non-EOF error for a Read beyond the limit, and closes the
-// underlying reader when its Close method is called.
-//
-// MaxBytesReader prevents clients from accidentally or maliciously
-// sending a large request and wasting server resources.
-func MaxBytesReader(w ResponseWriter, r io.ReadCloser, n int64) io.ReadCloser {
-	return &maxBytesReader{w: w, r: r, n: n}
-}
-
-type maxBytesReader struct {
-	w   ResponseWriter
-	r   io.ReadCloser // underlying reader
-	n   int64         // max bytes remaining
-	err error         // sticky error
-}
-
-func (l *maxBytesReader) Read(p []byte) (n int, err error) {
-	if l.err != nil {
-		return 0, l.err
-	}
-	if len(p) == 0 {
-		return 0, nil
-	}
-	// If they asked for a 32KB byte read but only 5 bytes are
-	// remaining, no need to read 32KB. 6 bytes will answer the
-	// question of the whether we hit the limit or go past it.
-	if int64(len(p)) > l.n+1 {
-		p = p[:l.n+1]
-	}
-	n, err = l.r.Read(p)
-
-	if int64(n) <= l.n {
-		l.n -= int64(n)
-		l.err = err
-		return n, err
-	}
-
-	n = int(l.n)
-	l.n = 0
-
-	// The server code and client code both use
-	// maxBytesReader. This "requestTooLarge" check is
-	// only used by the server code. To prevent binaries
-	// which only using the HTTP Client code (such as
-	// cmd/go) from also linking in the HTTP server, don't
-	// use a static type assertion to the server
-	// "*response" type. Check this interface instead:
-	type requestTooLarger interface {
-		requestTooLarge()
-	}
-	if res, ok := l.w.(requestTooLarger); ok {
-		res.requestTooLarge()
-	}
-	l.err = errors.New("http: request body too large")
-	return n, l.err
-}
-
-func (l *maxBytesReader) Close() error {
-	return l.r.Close()
-}
-*/
 
 func copyValues(dst, src url.Values) {
 	for k, vs := range src {
