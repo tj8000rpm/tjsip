@@ -3,13 +3,8 @@ package sip
 import (
 	"golang.org/x/net/http/httpguts"
 	"io"
+	"time"
 	"unicode/utf8"
-)
-
-const (
-	StageTransport = iota
-	StageIngress
-	StageEgress
 )
 
 const (
@@ -26,6 +21,13 @@ const (
 	LogWarn
 	LogInfo
 	LogDebug
+)
+
+var (
+	T1     = 500 * time.Millisecond
+	T2     = 4 * time.Second
+	T4     = 5 * time.Second
+	TimerC = 3 * time.Minute
 )
 
 var LogLevel = LogWarn

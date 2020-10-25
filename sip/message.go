@@ -72,6 +72,8 @@ var (
 	ErrMissingContentLength = &ProtocolError{"missing ContentLength in HEAD response"}
 
 	ErrMissingMandatoryHeader = &ProtocolError{"missing mandatory header in message"}
+	ErrHeaderParseError       = &ProtocolError{"malformed headder"}
+	ErrMalformedMessage       = &ProtocolError{"malformed message"}
 )
 
 var (
@@ -239,136 +241,114 @@ const defaultUserAgent = "Go-tj-sip-client/1.0"
 // If Body is present, Content-Length is <= 0 and TransferEncoding
 // hasn't been set to "identity", Write adds "Transfer-Encoding:
 // chunked" to the header. Body is closed after it is sent.
-func (r *Message) Write(w io.Writer) error {
-	return r.write(w, false, nil, nil)
-}
-
-// WriteProxy is like Write but writes the request in the form
-// expected by an HTTP proxy. In particular, WriteProxy writes the
-// initial Request-URI line of the request with an absolute URI, per
-// section 5.3 of RFC 7230, including the scheme and host.
-// In either case, WriteProxy also writes a Host header, using
-// either r.Host or r.URL.Host.
-func (r *Message) WriteProxy(w io.Writer) error {
-	return r.write(w, true, nil, nil)
-}
 */
+func (r *Message) Write(w io.Writer) error {
+	return r.write(w)
+}
 
-// extraHeaders may be nil
-// waitForContinue may be nil
-/*
-func (r *Message) write(w io.Writer, usingProxy bool, extraHeaders http.Header, waitForContinue func() bool) (err error) {
-	trace := httptrace.ContextClientTrace(r.Context())
-	if trace != nil && trace.WroteRequest != nil {
-		defer func() {
-			trace.WroteRequest(httptrace.WroteRequestInfo{
-				Err: err,
-			})
-		}()
+func (r *Message) writeResponse(w io.Writer) (err error) {
+	text := strings.Trim(strings.Trim(r.Status, " "), fmt.Sprintf("%03d", r.StatusCode))
+	text = strings.Trim(text, " ")
+	if _, err := fmt.Fprintf(w, "SIP/%d.%d %03d %s\r\n",
+		r.ProtoMajor, r.ProtoMinor, r.StatusCode, text); err != nil {
+		return err
 	}
+	for key, header := range r.Header {
+		for _, value := range header {
+			fmt.Fprintf(w, "%v: %v\r\n", key, value)
+		}
 
-	ruri := r.URL.RequestURI()
+	}
+	fmt.Fprintf(w, "\r\n")
+	return nil
 
-	// Wrap the writer in a bufio Writer if it's not already buffered.
-	// Don't always call NewWriter, as that forces a bytes.Buffer
-	// and other small bufio Writers to have a minimum 4k buffer
-	// size.
+}
+func (r *Message) writeRequest(w io.Writer) (err error) {
+	return nil
+}
+
+func (r *Message) write(w io.Writer) (err error) {
 	var bw *bufio.Writer
 	if _, ok := w.(io.ByteWriter); !ok {
 		bw = bufio.NewWriter(w)
 		w = bw
 	}
-
-	_, err = fmt.Fprintf(w, "%s %s HTTP/1.1\r\n", valueOrDefault(r.Method, "GET"), ruri)
-	if err != nil {
-		return err
+	if r.Request {
+		return r.writeRequest(w)
+	} else if r.Response {
+		return r.writeResponse(w)
 	}
-
-	// Use the defaultUserAgent unless the Header contains one, which
-	// may be blank to not send the header.
-	userAgent := defaultUserAgent
-	if r.Header.Get("User-Agent") == "" {
-		userAgent = r.Header.Get("User-Agent")
-	}
-	if userAgent != "" {
-		_, err = fmt.Fprintf(w, "User-Agent: %s\r\n", userAgent)
+	return nil
+	/*
+		// Process Body,ContentLength,Close,Trailer
+		tw, err := newTransferWriter(r)
 		if err != nil {
 			return err
 		}
-		if trace != nil && trace.WroteHeaderField != nil {
-			trace.WroteHeaderField("User-Agent", []string{userAgent})
-		}
-	}
-
-	// Process Body,ContentLength,Close,Trailer
-	tw, err := newTransferWriter(r)
-	if err != nil {
-		return err
-	}
-	err = tw.writeHeader(w, trace)
-	if err != nil {
-		return err
-	}
-
-	err = r.Header.writeSubset(w, reqWriteExcludeHeader, trace)
-	if err != nil {
-		return err
-	}
-
-	if extraHeaders != nil {
-		err = extraHeaders.write(w, trace)
+		err = tw.writeHeader(w, trace)
 		if err != nil {
 			return err
 		}
-	}
 
-	_, err = io.WriteString(w, "\r\n")
-	if err != nil {
-		return err
-	}
+		err = r.Header.writeSubset(w, reqWriteExcludeHeader, trace)
+		if err != nil {
+			return err
+		}
 
-	if trace != nil && trace.WroteHeaders != nil {
-		trace.WroteHeaders()
-	}
-
-	// Flush and wait for 100-continue if expected.
-	if waitForContinue != nil {
-		if bw, ok := w.(*bufio.Writer); ok {
-			err = bw.Flush()
+		if extraHeaders != nil {
+			err = extraHeaders.write(w, trace)
 			if err != nil {
 				return err
 			}
 		}
-		if trace != nil && trace.Wait100Continue != nil {
-			trace.Wait100Continue()
-		}
-		if !waitForContinue() {
-			r.closeBody()
-			return nil
-		}
-	}
 
-	if bw, ok := w.(*bufio.Writer); ok && tw.FlushHeaders {
-		if err := bw.Flush(); err != nil {
+		_, err = io.WriteString(w, "\r\n")
+		if err != nil {
 			return err
 		}
-	}
 
-	// Write body and trailer
-	err = tw.writeBody(w)
-	if err != nil {
-		if tw.bodyReadError == err {
-			err = requestBodyReadError{err}
+		if trace != nil && trace.WroteHeaders != nil {
+			trace.WroteHeaders()
 		}
-		return err
-	}
 
-	if bw != nil {
-		return bw.Flush()
-	}
-	return nil
+		// Flush and wait for 100-continue if expected.
+		if waitForContinue != nil {
+			if bw, ok := w.(*bufio.Writer); ok {
+				err = bw.Flush()
+				if err != nil {
+					return err
+				}
+			}
+			if trace != nil && trace.Wait100Continue != nil {
+				trace.Wait100Continue()
+			}
+			if !waitForContinue() {
+				r.closeBody()
+				return nil
+			}
+		}
+
+		if bw, ok := w.(*bufio.Writer); ok && tw.FlushHeaders {
+			if err := bw.Flush(); err != nil {
+				return err
+			}
+		}
+
+		// Write body and trailer
+		err = tw.writeBody(w)
+		if err != nil {
+			if tw.bodyReadError == err {
+				err = requestBodyReadError{err}
+			}
+			return err
+		}
+
+		if bw != nil {
+			return bw.Flush()
+		}
+		return nil
+	*/
 }
-*/
 
 // requestBodyReadError wraps an error from (*Message).write to indicate
 // that the error came from a Read call on the Request.Body.
@@ -715,7 +695,7 @@ func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
 	resp.Request = false
 
 	resp.StatusCode = 100
-	resp.Status = "100 Trying"
+	//resp.Status = "100 Trying"
 
 	resp.Proto = "SIP/2.0"
 	resp.ProtoMajor = 2
@@ -724,9 +704,11 @@ func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
 	resp.Header = make(http.Header)
 
 	for _, key := range responseMandatoryHeaders {
-		for _, value := range msg.Header[key] {
-			resp.Header.Add(key, value)
+		//for key, headers := range msg.Header {
+		for _, header := range msg.Header.Values(key) {
+			resp.Header.Add(key, header)
 		}
+		//}
 	}
 
 	resp.ctx = context.WithValue(msg.ctx, CallIdContextKey, resp.Header.Get("Call-ID"))
@@ -755,6 +737,42 @@ func (msg *Message) AddToTag() (err error) {
 		err = msg.addTag("t")
 	}
 	return err
+}
+
+func ViaParser(s string) (proto, sentBy string, via_params map[string]string, err error) {
+
+	temp_string_slice := strings.SplitN(strings.Trim(s, " "), " ", 2)
+	if len(temp_string_slice) < 2 {
+		return "", "", nil, ErrHeaderParseError
+	}
+
+	proto = temp_string_slice[0]
+
+	temp_string_slice = strings.Split(strings.Trim(temp_string_slice[1], " "), ";")
+
+	sentBy = temp_string_slice[0]
+	for _, param := range temp_string_slice[1:] {
+		if via_params == nil {
+			via_params = make(map[string]string)
+		}
+		key_val_slic := strings.SplitN(param, "=", 2)
+		key := key_val_slic[0]
+		val := key_val_slic[1]
+		via_params[key] = val
+	}
+
+	return proto, sentBy, via_params, nil
+}
+
+func (msg *Message) GetTopMostVia() (proto, sentBy string, params map[string]string, err error) {
+	viaHeaders := msg.Header["Via"]
+	err = nil
+	if len(viaHeaders) < 1 {
+		return "", "", nil, ErrMissingMandatoryHeader
+	}
+	topmostvia := viaHeaders[0]
+
+	return ViaParser(topmostvia)
 }
 
 /*

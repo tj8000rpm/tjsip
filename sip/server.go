@@ -20,6 +20,14 @@ var (
 	RecieveBufSizeB  = 9000
 )
 
+const (
+	LayerSocket = iota
+	LayerParser
+	LayerTransport
+	LayerTransaction
+	LayerCore
+)
+
 type atomicBool int32
 
 func (b *atomicBool) isSet() bool { return atomic.LoadInt32((*int32)(b)) != 0 }
@@ -30,6 +38,8 @@ func (b *atomicBool) setFalse()   { atomic.StoreInt32((*int32)(b), 0) }
 // About Server
 // -----------------------------------------------------
 type Server struct {
+	Conn *net.UDPConn
+
 	// Addr optionally specifies the TCP address for the server to listen on,
 	// in the form "host:port". If empty, ":sip" (port 5060) is used.
 	// The service names are defined in RFC 6335 and assigned by IANA.
@@ -110,6 +120,25 @@ type Server struct {
 	onShutdown []func()
 
 	loglevel int
+
+	//transactionController TransactionController
+
+	serverTransactions ServerTransactions
+	clientTransactions ClientTransactions
+	//ServerTransactions map[serverTransactionKey]*ServerTransaction
+	//ClientTransactions map[clientTransactionKey]*ClientTransaction
+
+	sentQueue chan *Message
+}
+
+type ServerTransactions struct {
+	Mu           sync.Mutex
+	Transactions map[serverTransactionKey]*ServerTransaction
+}
+
+type ClientTransactions struct {
+	Mu           sync.Mutex
+	Transactions map[clientTransactionKey]*ClientTransaction
 }
 
 func (s *Server) logf(format string, args ...interface{}) {
@@ -129,51 +158,54 @@ func (s *Server) log(args string) {
 	}
 }
 
-func (s *Server) criticalf(format string, args ...interface{}) {
+func (s *Server) Criticalf(format string, args ...interface{}) {
 	if LogLevel >= LogCritical {
 		s.logf("[CRITICAL] "+format, args...)
 	}
 }
 
-func (s *Server) errorf(format string, args ...interface{}) {
+func (s *Server) Errorf(format string, args ...interface{}) {
 	if LogLevel >= LogError {
 		s.logf("[ERROR] "+format, args...)
 	}
 }
 
-func (s *Server) warnf(format string, args ...interface{}) {
+func (s *Server) Warnf(format string, args ...interface{}) {
 	if LogLevel >= LogWarn {
 		s.logf("[WARNING] "+format, args...)
 	}
 }
 
-func (s *Server) infof(format string, args ...interface{}) {
+func (s *Server) Infof(format string, args ...interface{}) {
 	if LogLevel >= LogInfo {
 		s.logf("[INFO] "+format, args...)
 	}
 }
 
-func (s *Server) debugf(format string, args ...interface{}) {
+func (s *Server) Debugf(format string, args ...interface{}) {
 	if LogLevel >= LogDebug {
 		s.logf("[DEBUG] "+format, args...)
 	}
 }
 
-func (srv *Server) handle(stage int, msg *Message) error {
+func (srv *Server) handle(layer int, msg *Message) error {
 	handler := srv.Handler
 	if handler == nil {
 		handler = DefaultServeMux
 	}
-	err := handler.ServeSIP(stage, msg)
-	return err
+	return handler.ServeSIP(layer, srv, msg)
 }
 
-func (srv *Server) transport(msg *Message) error {
-	return srv.handle(StageTransport, msg)
+func (srv *Server) socketHandler(msg *Message) error {
+	return srv.handle(LayerSocket, msg)
 }
 
 func (srv *Server) ingress(msg *Message) error {
-	return srv.handle(StageIngress, msg)
+	return srv.handle(LayerParser, msg)
+}
+
+func (srv *Server) handleToCore(msg *Message) error {
+	return srv.handle(LayerCore, msg)
 }
 
 func (*Server) newBufioReader(r io.Reader) *bufio.Reader {
@@ -183,24 +215,122 @@ func (*Server) newBufioReader(r io.Reader) *bufio.Reader {
 func (srv *Server) packetProcessing(ctx context.Context, buf []byte, size int, addr *net.UDPAddr) {
 
 	bufr := srv.newBufioReader(bytes.NewReader(buf[:size]))
+
 	msg := CreateMessage(fmt.Sprintf("%v", addr))
 	msg.ctx = ctx
 
-	if err := srv.transport(msg); err != nil {
+	// For IP / socket level filter  etc...
+	if err := srv.socketHandler(msg); err != nil {
 		// packet ignored
 		return
 	}
 
 	if err := ReadMessage(msg, bufr); err != nil {
-		srv.debugf("sip: Malformed packet - %v", err)
+		srv.Debugf("sip: Malformed packet - %v", err)
 		// packet ignored
 		return
 	}
 
+	// For SIP Message manipulation etc...
 	if err := srv.ingress(msg); err != nil {
-		srv.warnf("Packet was dropped: %v", err)
+		srv.Warnf("Packet was dropped: %v", err)
 		return
 	}
+
+	var transaction Transaction
+	if msg.Request {
+		query, err := GenerateServerTransactionKey(msg)
+		if err != nil {
+			//malformed packet
+			srv.Infof("%v", err)
+			return
+		}
+		transaction = srv.lookupServerTransaction(query)
+		srv.Debugf("?[%v]=%v / %v", query, transaction, msg)
+	} else if msg.Response {
+		query, err := GenerateClientTransactionKey(msg)
+		if err != nil {
+			//malformed packet
+			srv.Infof("%v", err)
+			return
+		}
+		transaction = srv.lookupClientTransaction(query)
+	}
+
+	if transaction == nil {
+		err := srv.handleToCore(msg)
+		if err != nil {
+			// SIP Core return error
+			srv.Warnf("%v", err)
+			return
+		}
+	} else {
+		transaction.Handle(msg)
+	}
+}
+
+func (s *Server) AddServerTransaction(msg *Message, transaction *ServerTransaction) error {
+	s.serverTransactions.Mu.Lock()
+	defer s.serverTransactions.Mu.Unlock()
+	if s.serverTransactions.Transactions == nil {
+		s.serverTransactions.Transactions = make(map[serverTransactionKey]*ServerTransaction)
+	}
+	key := transaction.Key
+	_, ok := s.serverTransactions.Transactions[*key]
+	if ok {
+		s.Warnf("duplicated key: %v", key)
+		s.Warnf("duplicated Transation: \n%v", *(s.serverTransactions.Transactions[*key]))
+		// Transaction access will Racing
+		return ErrTransactionDuplicated
+	}
+	s.serverTransactions.Transactions[*key] = transaction
+	s.Debugf("Server Transaction size: %d", len(s.serverTransactions.Transactions))
+	return nil
+}
+func (s *Server) DeleteServerTransaction(transaction *ServerTransaction) error {
+	s.serverTransactions.Mu.Lock()
+	defer s.serverTransactions.Mu.Unlock()
+	key := transaction.Key
+	if s.serverTransactions.Transactions == nil {
+		return nil
+	}
+	_, ok := s.serverTransactions.Transactions[*key]
+	if ok {
+		// Transaction access will Racing
+		delete(s.serverTransactions.Transactions, *key)
+		s.Debugf("Server Transaction size: %d", len(s.serverTransactions.Transactions))
+		return nil
+	}
+	return nil
+}
+
+func (s *Server) AddClientTransaction(msg *Message, transaction *ClientTransaction) error {
+	s.clientTransactions.Mu.Lock()
+	defer s.clientTransactions.Mu.Unlock()
+	key := transaction.Key
+	if s.clientTransactions.Transactions == nil {
+		s.clientTransactions.Transactions = make(map[clientTransactionKey]*ClientTransaction)
+	}
+	s.clientTransactions.Transactions[*key] = transaction
+	return nil
+}
+
+func (s *Server) lookupServerTransaction(query *serverTransactionKey) Transaction {
+	s.serverTransactions.Mu.Lock()
+	defer s.serverTransactions.Mu.Unlock()
+	transaction, ok := s.serverTransactions.Transactions[*query]
+	if !ok {
+		// Transaction no found
+		return nil
+	}
+	// Transaction found
+	return transaction
+}
+
+func (s *Server) lookupClientTransaction(query *clientTransactionKey) Transaction {
+	s.clientTransactions.Mu.Lock()
+	defer s.clientTransactions.Mu.Unlock()
+	return nil
 }
 
 func (s *Server) getDoneChan() <-chan struct{} {
@@ -228,8 +358,30 @@ func (s *Server) closeDoneChanLocked() {
 	}
 }
 
+func (srv *Server) WriteMessage(sentMsg *Message) error {
+	srv.Debugf("recieve message to queue")
+	//srv.sentQueue <- msg
+	srv.Debugf("Sent message to queue")
+	w := new(bytes.Buffer)
+	sentMsg.Write(w)
+	srv.Debugf("msg-------\n%v\n", w)
+	udpAddr, err := net.ResolveUDPAddr("udp", sentMsg.RemoteAddr)
+	if err != nil {
+		// Error ignore sent message
+		return err
+	}
+	_, err = srv.Conn.WriteTo(w.Bytes(), udpAddr)
+	if err != nil {
+		// will raise transport error to TU
+		return err
+	}
+	srv.Debugf("sent message done")
+	return nil
+}
+
 func (srv *Server) Serve(udpLn *net.UDPConn) error {
 	srv.doneChan = make(chan struct{})
+	srv.sentQueue = make(chan *Message)
 	defer udpLn.Close()
 
 	baseCtx := context.Background()
@@ -238,6 +390,33 @@ func (srv *Server) Serve(udpLn *net.UDPConn) error {
 	var tempDelay time.Duration // how long to sleep on accept failure
 
 	buf := make([]byte, RecieveBufSizeB)
+
+	/*
+		go func() error {
+			for {
+				select {
+				case <-srv.getDoneChan():
+					return ErrServerClosed
+				case sentMsg := <-srv.sentQueue:
+					srv.Debugf("sent message: %v", sentMsg)
+					go func() {
+						w := new(bytes.Buffer)
+						sentMsg.Write(w)
+						srv.Debugf("msg-------\n%v\n", w)
+						udpAddr, err := net.ResolveUDPAddr("udp", sentMsg.RemoteAddr)
+						if err != nil {
+							// Error ignore sent message
+						}
+						_, err = udpLn.WriteTo(w.Bytes(), udpAddr)
+						if err != nil {
+							// will raise transport error to TU
+						}
+						srv.Debugf("sent message done")
+					}()
+				}
+			}
+		}()
+	*/
 
 	for {
 		n, addr, err := udpLn.ReadFromUDP(buf)
@@ -256,7 +435,7 @@ func (srv *Server) Serve(udpLn *net.UDPConn) error {
 				if max := 1 * time.Second; tempDelay > max {
 					tempDelay = max
 				}
-				srv.logf("sip: Accept error: %v; retrying in %v", err, tempDelay)
+				srv.Warnf("sip: Accept error: %v; retrying in %v", err, tempDelay)
 				time.Sleep(tempDelay)
 				continue
 			}
@@ -264,7 +443,10 @@ func (srv *Server) Serve(udpLn *net.UDPConn) error {
 		}
 		connCtx := ctx
 		tempDelay = 0
-		go srv.packetProcessing(connCtx, buf, n, addr)
+		copiedBuf := make([]byte, n)
+		n = copy(copiedBuf, buf)
+		go srv.packetProcessing(connCtx, copiedBuf, n, addr)
+
 	}
 
 	return nil
@@ -287,11 +469,12 @@ func (srv *Server) ListenAndServe() error {
 	}
 
 	ln, err := net.ListenUDP("udp", udpAddr)
-	defer srv.infof("UDP Server has been stoped")
+	defer srv.Infof("UDP Server has been stoped")
 	if err != nil {
 		return err
 	}
-	srv.infof("Starting UDP Server...")
+	srv.Infof("Starting UDP Server...")
+	srv.Conn = ln
 	return srv.Serve(ln)
 }
 
@@ -315,7 +498,7 @@ func ListenAndServe(addr string, handler Handler) error {
 // About Handler
 // -----------------------------------------------------
 type Handler interface {
-	ServeSIP(int, *Message) error
+	ServeSIP(int, *Server, *Message) error
 }
 
 // -----------------------------------------------------
@@ -364,7 +547,7 @@ type ServeMux struct {
 
 type muxEntry struct {
 	h     Handler
-	stage int // TODO: change int to custom type
+	layer int // TODO: change int to custom type
 	id    string
 }
 
@@ -375,13 +558,13 @@ var DefaultServeMux = &defaultServeMux
 
 var defaultServeMux ServeMux
 
-func (mux *ServeMux) ServeSIP(stage int, msg *Message) error {
-	handlers := mux.m[stage]
+func (mux *ServeMux) ServeSIP(layer int, srv *Server, msg *Message) (err error) {
+	handlers := mux.m[layer]
 	if handlers == nil {
 		return nil
 	}
 	for _, h := range handlers {
-		err := h.h.ServeSIP(stage, msg)
+		err = h.h.ServeSIP(layer, srv, msg)
 		if err != nil {
 			return err
 		}
@@ -389,25 +572,25 @@ func (mux *ServeMux) ServeSIP(stage int, msg *Message) error {
 	return nil
 }
 
-func (mux *ServeMux) HandleFunc(stage int, id string, handler func(int, *Message) error) {
+func (mux *ServeMux) HandleFunc(layer int, id string, handler func(int, *Server, *Message) error) {
 	if id == "" {
 		panic("sip: invalid id")
 	}
 	if handler == nil {
 		panic("sip: nil handler")
 	}
-	mux.Handle(stage, id, HandlerFunc(handler))
+	mux.Handle(layer, id, HandlerFunc(handler))
 }
 
 // Handle registers the handler for the given pattern.
 // If a handler already exists for pattern, Handle panics.
-func (mux *ServeMux) Handle(stage int, id string, handler Handler) {
+func (mux *ServeMux) Handle(layer int, id string, handler Handler) {
 	mux.mu.Lock()
 	defer mux.mu.Unlock()
 
 	/* TODO : compare iota
-	if stage == "" {
-		panic("sip: invalid stage")
+	if layer == "" {
+		panic("sip: invalid layer")
 	}
 	*/
 	if id == "" {
@@ -416,31 +599,31 @@ func (mux *ServeMux) Handle(stage int, id string, handler Handler) {
 	if handler == nil {
 		panic("sip: nil handler")
 	}
-	if stg, exist_stg := mux.m[stage]; exist_stg {
+	if stg, exist_stg := mux.m[layer]; exist_stg {
 		if _, exist_id := stg[id]; exist_id {
-			panic(fmt.Sprintf("sip: multiple registrations for %v/%v", stage, id))
+			panic(fmt.Sprintf("sip: multiple registrations for %v/%v", layer, id))
 		}
 	}
 
 	if mux.m == nil {
 		mux.m = make(map[int]map[string]muxEntry)
 	}
-	if mux.m[stage] == nil {
-		mux.m[stage] = make(map[string]muxEntry)
+	if mux.m[layer] == nil {
+		mux.m[layer] = make(map[string]muxEntry)
 	}
-	e := muxEntry{h: handler, stage: stage, id: id}
-	mux.m[stage][id] = e
+	e := muxEntry{h: handler, layer: layer, id: id}
+	mux.m[layer][id] = e
 }
 
 // Handle registers the handler for the given pattern
 // in the DefaultServeMux.
 // The documentation for ServeMux explains how patterns are matched.
-func Handle(stage int, id string, handler Handler) { DefaultServeMux.Handle(stage, id, handler) }
+func Handle(layer int, id string, handler Handler) { DefaultServeMux.Handle(layer, id, handler) }
 
 // HandleFunc registers the handler function for the given condition function
 // in the DefaultServeMux.
-func HandleFunc(stage int, id string, handler func(int, *Message) error) {
-	DefaultServeMux.HandleFunc(stage, id, handler)
+func HandleFunc(layer int, id string, handler func(int, *Server, *Message) error) {
+	DefaultServeMux.HandleFunc(layer, id, handler)
 }
 
 // -----------------------------------------------------
@@ -450,11 +633,11 @@ func HandleFunc(stage int, id string, handler func(int, *Message) error) {
 // ordinary functions as HTTP handlers. If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
 // Handler that calls f.
-type HandlerFunc func(int, *Message) error
+type HandlerFunc func(int, *Server, *Message) error
 
-// ServeSIP calls f(stage, m).
-func (f HandlerFunc) ServeSIP(stage int, m *Message) error {
-	return f(stage, m)
+// ServeSIP calls f(layer, m).
+func (f HandlerFunc) ServeSIP(layer int, s *Server, m *Message) error {
+	return f(layer, s, m)
 }
 
 // -----------------------------------------------------
