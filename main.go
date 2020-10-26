@@ -46,6 +46,7 @@ var callGap = callGapControl{enable: false, last: time.Now()}
 func myHandlerRedirect(srv *sip.Server, msg *sip.Message, trans *sip.ServerTransaction) error {
 	rep := msg.GenerateResponseFromRequest()
 	rep.AddToTag()
+	time.Sleep(time.Millisecond * 50)
 
 	rep.StatusCode = 300
 	rep.Header.Set("Contact", "<sip:0312341234@example.com>")
@@ -109,7 +110,7 @@ func myHandler(layer int, srv *sip.Server, msg *sip.Message) error {
 
 		log.Printf("ORIG: cllled in Transport\n")
 		return nil
-	} else if layer == sip.LayerParser {
+	} else if layer == sip.LayerParserIngress {
 
 		log.Printf("ORIG: cllled in Ingress\n")
 		log.Printf("ORIG: remoteAddr : %v\n", msg.RemoteAddr)

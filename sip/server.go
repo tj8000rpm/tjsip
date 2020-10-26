@@ -21,7 +21,8 @@ var (
 
 const (
 	LayerSocket = iota
-	LayerParser
+	LayerParserIngress
+	LayerParserEgress
 	LayerTransport
 	LayerTransaction
 	LayerCore
@@ -200,7 +201,11 @@ func (srv *Server) socketHandler(msg *Message) error {
 }
 
 func (srv *Server) ingress(msg *Message) error {
-	return srv.handle(LayerParser, msg)
+	return srv.handle(LayerParserIngress, msg)
+}
+
+func (srv *Server) egress(msg *Message) error {
+	return srv.handle(LayerParserEgress, msg)
 }
 
 func (srv *Server) handleToCore(msg *Message) error {
@@ -286,6 +291,7 @@ func (s *Server) AddServerTransaction(msg *Message, transaction *ServerTransacti
 	s.Debugf("Server Transaction size: %d", len(s.serverTransactions.Transactions))
 	return nil
 }
+
 func (s *Server) DeleteServerTransaction(transaction *ServerTransaction) error {
 	s.serverTransactions.Mu.Lock()
 	defer s.serverTransactions.Mu.Unlock()
@@ -311,6 +317,23 @@ func (s *Server) AddClientTransaction(msg *Message, transaction *ClientTransacti
 		s.clientTransactions.Transactions = make(map[clientTransactionKey]*ClientTransaction)
 	}
 	s.clientTransactions.Transactions[*key] = transaction
+	return nil
+}
+
+func (s *Server) DeleteClientTransaction(transaction *ClientTransaction) error {
+	s.clientTransactions.Mu.Lock()
+	defer s.clientTransactions.Mu.Unlock()
+	key := transaction.Key
+	if s.clientTransactions.Transactions == nil {
+		return nil
+	}
+	_, ok := s.clientTransactions.Transactions[*key]
+	if ok {
+		// Transaction access will Racing
+		delete(s.clientTransactions.Transactions, *key)
+		s.Debugf("client Transaction size: %d", len(s.clientTransactions.Transactions))
+		return nil
+	}
 	return nil
 }
 
@@ -359,6 +382,13 @@ func (s *Server) closeDoneChanLocked() {
 
 func (srv *Server) WriteMessage(sentMsg *Message) error {
 	srv.Debugf("Sent message to queue")
+
+	// For SIP Message manipulation etc...
+	if err := srv.egress(sentMsg); err != nil {
+		srv.Warnf("Packet was dropped: %v", err)
+		return err
+	}
+
 	w := new(bytes.Buffer)
 	sentMsg.Write(w)
 	srv.Debugf("msg-------\n%v\n", w)

@@ -20,6 +20,8 @@ var (
 	Timer100Try = 200 * time.Millisecond
 )
 
+type transactionState int
+
 const (
 	TransactionStateInit = iota
 	TransactionStateTrying
@@ -41,29 +43,76 @@ var (
 type Transaction interface {
 	Handle(*Message)
 	Controller()
+	Destroy()
 }
 
-type transactionState int
+type BaseTransaction struct {
+	Mu      sync.Mutex
+	Key     interface{}
+	Server  *Server
+	Invite  bool
+	State   transactionState
+	TuChan  chan *Message
+	DelChan chan bool
+	Err     error
+}
+
+/* ****************************************************
+ * Base Transaction
+ * ****************************************************/
+
+func (t *BaseTransaction) WriteMessage(msg *Message) {
+	t.Mu.Lock()
+	defer t.Mu.Unlock()
+	if t.State >= TransactionStateTerminated {
+		t.Server.Warnf("[%v] Transation User channel already closed", t.Key)
+		t.Server.Warnf("[%v] Transation : %v", t.Key, t)
+		return
+	}
+	t.TuChan <- msg
+}
+
+func (t *BaseTransaction) DestroyChanel() {
+	t.Mu.Lock()
+	defer t.Mu.Unlock()
+	if t.State == TransactionStateClosed {
+		t.Server.Debugf("[%v] transaction already closed", t.Key)
+		return
+	}
+	t.State = TransactionStateClosed
+	t.Server.Debugf("[%v] Transaction was destroyed", t.Key)
+	close(t.DelChan)
+	close(t.TuChan)
+}
+
+/* ****************************************************
+ * Client Transaction
+ * ****************************************************/
 
 type clientTransactionKey struct {
 	viaBranch  string
 	cseqMethod string
 }
 type ClientTransaction struct {
-	Key      *clientTransactionKey
-	Server   *Server
-	isInvite bool
-	state    transactionState
-	req      *Message
-	tuChan   chan *Message
-	delChan  chan bool
-	err      error
+	BaseTransaction
+	Key     *clientTransactionKey
+	request *Message
+}
+
+func (t *ClientTransaction) Destroy() {
+	t.DestroyChanel()
+	t.Server.DeleteClientTransaction(t)
 }
 
 func (t *ClientTransaction) Handle(res *Message) {
 }
+
 func (t *ClientTransaction) Controller(res *Message) {
 }
+
+/* ****************************************************
+ * Server Transaction
+ * ****************************************************/
 
 type serverTransactionKey struct {
 	viaBranch string
@@ -72,26 +121,24 @@ type serverTransactionKey struct {
 }
 
 type ServerTransaction struct {
-	mu             sync.Mutex
+	BaseTransaction
 	Key            *serverTransactionKey
-	Server         *Server
-	IsInvite       bool
-	State          transactionState
 	request        *Message
 	provisionalRes *Message
 	finalRes       *Message
-	tuChan         chan *Message
-	delChan        chan bool
-	err            error
+}
+
+func (t *ServerTransaction) Destroy() {
+	t.DestroyChanel()
+	t.Server.DeleteServerTransaction(t)
 }
 
 func (t *ServerTransaction) Handle(req *Message) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if (t.State == TransactionStateCompleted || t.State == TransactionStateConfirmed) &&
-		req.Method == "ACK" {
+	t.Mu.Lock()
+	defer t.Mu.Unlock()
+	if req.Method == "ACK" {
 		t.Server.Debugf("ACK Recived")
-		t.tuChan <- req
+		t.TuChan <- req
 		return
 	}
 	if t.finalRes != nil {
@@ -106,23 +153,13 @@ func (t *ServerTransaction) Handle(req *Message) {
 	//t.Server.Infof("retrans Transation: \n%v", *t)
 }
 
-func (t *ServerTransaction) WriteMessage(msg *Message) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.State >= TransactionStateTerminated {
-		t.Server.Warnf("[%v] Transation User channel already closed", t.Key)
-		t.Server.Warnf("[%v] Transation : %v", t.Key, t)
-		return
-	}
-	t.tuChan <- msg
-}
-
 func (t *ServerTransaction) controllerTerminated() {
 	t.Server.Debugf("state to terminated in transacation %v", t.Key)
 	t.State = TransactionStateTerminated
 	t.Server.Debugf("[%v] Transaction was closed", t.Key)
 	t.Destroy()
 }
+
 func (t *ServerTransaction) inviteControllerConfirmed() {
 	t.Server.Debugf("state to confirmed in transacation %v", t.Key)
 	t.State = TransactionStateCompleted
@@ -134,9 +171,9 @@ func (t *ServerTransaction) inviteControllerConfirmed() {
 
 	for {
 		select {
-		case <-t.delChan:
+		case <-t.DelChan:
 			return
-		case msg := <-t.tuChan:
+		case msg := <-t.TuChan:
 			if msg == nil {
 				return
 			}
@@ -168,7 +205,7 @@ func (t *ServerTransaction) inviteControllerCompleted() {
 			t.Server.Debugf("[%v] Timer H fire", t.Key)
 			t.controllerTerminated()
 			return
-		case msg := <-t.tuChan:
+		case msg := <-t.TuChan:
 			if msg == nil {
 				return
 			}
@@ -183,45 +220,47 @@ func (t *ServerTransaction) inviteControllerCompleted() {
 func (t *ServerTransaction) inviteController() {
 	t.State = TransactionStateProceeding
 	select {
-	case <-t.delChan:
+	case <-t.DelChan:
 		t.Server.Debugf("[%v] Recived delete signal", t.Key)
 		return
 	case <-time.After(Timer100Try):
 		t.Server.Debugf("[%v] Sent 100 Trying", t.Key)
 		provRes := t.request.GenerateResponseFromRequest()
-		t.Server.WriteMessage(provRes)
-		t.mu.Lock()
+		t.Mu.Lock()
 		t.provisionalRes = provRes
-		t.mu.Unlock()
-	case msg := <-t.tuChan:
+		t.Mu.Unlock()
+		t.Server.WriteMessage(provRes)
+	case msg := <-t.TuChan:
 		if msg == nil {
 			return
 		}
 		if !msg.Response {
-			t.err = ErrTransactionUnexpectedMessage
+			t.Err = ErrTransactionUnexpectedMessage
 			t.Destroy()
 			return
 		}
-		t.Server.WriteMessage(msg)
 		if msg.StatusCode > 100 && msg.StatusCode < 200 {
 			// transmit response state will conitunue
 			t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
-			t.mu.Lock()
+			t.Mu.Lock()
 			t.provisionalRes = msg
-			t.mu.Unlock()
+			t.Mu.Unlock()
+			t.Server.WriteMessage(msg)
 		} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
 			// transmit response and state to Terminated
 			t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
-			t.mu.Lock()
+			t.Mu.Lock()
 			t.finalRes = msg
-			t.mu.Unlock()
+			t.Mu.Unlock()
+			t.Server.WriteMessage(msg)
 			t.controllerTerminated()
 			return
 		} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
 			t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
-			t.mu.Lock()
+			t.Mu.Lock()
 			t.finalRes = msg
-			t.mu.Unlock()
+			t.Mu.Unlock()
+			t.Server.WriteMessage(msg)
 			t.inviteControllerCompleted()
 			return
 		}
@@ -233,10 +272,10 @@ func (t *ServerTransaction) inviteController() {
 	for {
 		t.Server.Debugf("Rediy to next response")
 		select {
-		case <-t.delChan:
+		case <-t.DelChan:
 			t.Server.Debugf("[%v] Recived delete signal", t.Key)
 			return
-		case msg := <-t.tuChan:
+		case msg := <-t.TuChan:
 			if msg == nil {
 				return
 			}
@@ -245,26 +284,28 @@ func (t *ServerTransaction) inviteController() {
 				t.Destroy()
 				return
 			}
-			t.Server.WriteMessage(msg)
 			if msg.StatusCode > 100 && msg.StatusCode < 200 {
 				// transmit response state will conitunue
 				t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
-				t.mu.Lock()
+				t.Mu.Lock()
 				t.provisionalRes = msg
-				t.mu.Unlock()
+				t.Mu.Unlock()
+				t.Server.WriteMessage(msg)
 			} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
 				// transmit response and state to Terminated
 				t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
-				t.mu.Lock()
+				t.Mu.Lock()
 				t.finalRes = msg
-				t.mu.Unlock()
+				t.Mu.Unlock()
+				t.Server.WriteMessage(msg)
 				t.controllerTerminated()
 				return
 			} else if msg.StatusCode >= 300 && msg.StatusCode <= 600 {
 				t.Server.Debugf("[%v] Transmit final response(NOT 2xx) from TU", t.Key)
+				t.Mu.Lock()
 				t.finalRes = msg
-				t.mu.Lock()
-				t.mu.Unlock()
+				t.Mu.Unlock()
+				t.Server.WriteMessage(msg)
 				t.inviteControllerCompleted()
 				return
 			} else {
@@ -279,15 +320,15 @@ func (t *ServerTransaction) nonInviteControllerProceeding() {
 	t.State = TransactionStateProceeding
 	for {
 		select {
-		case <-t.delChan:
+		case <-t.DelChan:
 			t.Server.Debugf("[%v] Recived delete signal", t.Key)
 			return
-		case msg := <-t.tuChan:
+		case msg := <-t.TuChan:
 			if msg == nil {
 				return
 			}
 			if !msg.Response {
-				t.err = ErrTransactionUnexpectedMessage
+				t.Err = ErrTransactionUnexpectedMessage
 				t.Destroy()
 				return
 			}
@@ -317,7 +358,7 @@ func (t *ServerTransaction) nonInviteControllerCompleted() {
 		t.Server.Debugf("[%v] Timer J fire", t.Key)
 		t.controllerTerminated()
 		return
-	case <-t.delChan:
+	case <-t.DelChan:
 		t.Server.Debugf("[%v] Recived delete signal", t.Key)
 		return
 	}
@@ -326,15 +367,15 @@ func (t *ServerTransaction) nonInviteControllerCompleted() {
 func (t *ServerTransaction) nonInviteController() {
 	t.State = TransactionStateTrying
 	select {
-	case <-t.delChan:
+	case <-t.DelChan:
 		t.Server.Debugf("[%v] Recived delete signal", t.Key)
 		return
-	case msg := <-t.tuChan:
+	case msg := <-t.TuChan:
 		if msg == nil {
 			return
 		}
 		if !msg.Response {
-			t.err = ErrTransactionUnexpectedMessage
+			t.Err = ErrTransactionUnexpectedMessage
 			t.Destroy()
 			return
 		}
@@ -358,24 +399,11 @@ func (t *ServerTransaction) nonInviteController() {
 }
 
 func (t *ServerTransaction) Controller() {
-	if t.IsInvite {
+	if t.Invite {
 		t.inviteController()
 	} else {
 		t.nonInviteController()
 	}
-}
-func (t *ServerTransaction) Destroy() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.State == TransactionStateClosed {
-		t.Server.Debugf("[%v] transaction already closed", t.Key)
-		return
-	}
-	t.State = TransactionStateClosed
-	t.Server.Debugf("[%v] Transaction was destroyed", t.Key)
-	close(t.delChan)
-	close(t.tuChan)
-	t.Server.DeleteServerTransaction(t)
 }
 
 func NewServerInviteTransaction(srv *Server, key *serverTransactionKey, msg *Message) *ServerTransaction {
@@ -389,11 +417,11 @@ func NewServerNonInviteTransaction(srv *Server, key *serverTransactionKey, msg *
 func newServerTransaction(srv *Server, isInvite bool, key *serverTransactionKey, msg *Message) *ServerTransaction {
 	trans := new(ServerTransaction)
 	trans.State = TransactionStateInit
-	trans.IsInvite = isInvite
+	trans.Invite = isInvite
 	trans.Server = srv
-	trans.tuChan = make(chan *Message)
-	trans.err = nil
-	trans.delChan = make(chan bool)
+	trans.TuChan = make(chan *Message)
+	trans.Err = nil
+	trans.DelChan = make(chan bool)
 	trans.Key = key
 	trans.request = msg
 	go trans.Controller()
