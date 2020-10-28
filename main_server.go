@@ -1,14 +1,28 @@
 package main
 
 import (
-	"fmt"
+	//"github.com/tj8000rpm/tjsip/sip"
 	"log"
-	"net/http"
+	// "net"
+	// "fmt"
 	"os"
 	"sip/sip"
 	"sync"
 	"time"
 )
+
+type lastAccess struct {
+	remoteAddr string
+	lastCall   time.Time
+}
+
+type callGapControl struct {
+	enable         bool
+	duration       time.Duration
+	mu             sync.Mutex
+	last           time.Time
+	restrictedcall int
+}
 
 type callStat struct {
 	mu                   sync.Mutex
@@ -25,6 +39,21 @@ func (stat *callStat) Increment(response int) {
 
 var stat = callStat{
 	//completedPerResponse: make(map[int]int),
+}
+
+var callGap = callGapControl{enable: false, last: time.Now()}
+
+func myHandlerRedirect(srv *sip.Server, msg *sip.Message, trans *sip.ServerTransaction) error {
+	rep := msg.GenerateResponseFromRequest()
+	rep.AddToTag()
+	time.Sleep(time.Millisecond * 50)
+
+	rep.StatusCode = 300
+	rep.Header.Set("Contact", "<sip:0312341234@example.com>")
+	trans.WriteMessage(rep)
+	stat.Increment(300)
+
+	return nil
 }
 
 func myHandlerInvite(srv *sip.Server, msg *sip.Message, trans *sip.ServerTransaction) error {
@@ -60,6 +89,44 @@ func myHandlerNonInvite(srv *sip.Server, msg *sip.Message, trans *sip.ServerTran
 	trans.WriteMessage(rep)
 	return nil
 }
+func myHandler(layer int, srv *sip.Server, msg *sip.Message) error {
+	// remoteAddr, err := net.ResolveUDPAddr("udp", req.RemoteAddr)
+	// remoteIPStr := remoteAddr.IP.String()
+
+	if layer == sip.LayerSocket {
+		if callGap.enable {
+			now := time.Now()
+			cur_duration := now.Sub(callGap.last)
+			if callGap.duration >= cur_duration {
+				callGap.mu.Lock()
+				callGap.restrictedcall++
+				callGap.mu.Unlock()
+				return sip.ErrServerClosed
+			}
+			callGap.mu.Lock()
+			callGap.last = now
+			callGap.mu.Unlock()
+		}
+
+		log.Printf("ORIG: cllled in Transport\n")
+		return nil
+	} else if layer == sip.LayerParserIngress {
+
+		log.Printf("ORIG: cllled in Ingress\n")
+		log.Printf("ORIG: remoteAddr : %v\n", msg.RemoteAddr)
+		/*
+			if msg.Request {
+				log.Printf("ORIG: URI : %v\n", msg.RequestURI)
+				log.Printf("ORIG: RESPONSE : %v\n", rep)
+			} else {
+				log.Printf("ORIG: Status Code : %v\n", msg.StatusCode)
+				log.Printf("ORIG: Status : %v\n", msg.Status)
+			}
+		*/
+		return nil
+	}
+	return nil
+}
 
 func mySipCoreHandler(layer int, srv *sip.Server, msg *sip.Message) error {
 	if layer != sip.LayerCore {
@@ -80,6 +147,9 @@ func mySipCoreHandler(layer int, srv *sip.Server, msg *sip.Message) error {
 				newTransaction.Destroy()
 				return err
 			}
+			if msg.RemoteAddr == "127.0.0.1:5062" {
+				return myHandlerRedirect(srv, msg, newTransaction)
+			}
 			return myHandlerInvite(srv, msg, newTransaction)
 		} else {
 			newTransaction = sip.NewServerNonInviteTransaction(srv, key, msg)
@@ -90,73 +160,11 @@ func mySipCoreHandler(layer int, srv *sip.Server, msg *sip.Message) error {
 	return nil
 }
 
-func clientMain(srv *sip.Server) {
-	time.Sleep(time.Second * 1)
-	for {
-		log.Printf("client main")
-		msg := sip.CreateMessage("127.0.0.1:5062")
-		msg.Request = true
-		msg.Method = "INVITE"
-		msg.RequestURI = "sip:110@127.0.0.1:5062"
-		msg.Header = make(http.Header)
-		msg.Header.Add("Call-ID", "aaaaaaaa@127.0.0.1:5060")
-		msg.Header.Add("From", "Hoge@127.0.0.1:5060")
-		msg.Header.Add("To", "hige@127.0.0.1:5062")
-		msg.Header.Add("Max-Forward", "70")
-		msg.Header.Add("CSeq", "1 INVITE")
-		via := fmt.Sprintf("SIP/2.0/UDP 127.0.0.1:5060;branch=%s", sip.GenerateBranchParam())
-		msg.Header.Add("Via", via)
-		msg.AddFromTag()
-
-		log.Printf("%v", msg)
-
-		key, err := sip.GenerateClientTransactionKey(msg)
-		if err != nil {
-			log.Printf("TransactionKey is error %v", err)
-			return
-		}
-		log.Printf("Transaction Key: %v", key)
-		respChan := make(chan *sip.Message, 10)
-		newTransaction := sip.NewClientInviteTransaction(srv, key, msg, respChan)
-		log.Printf("Transaction: %v", newTransaction)
-		err = srv.AddClientTransaction(newTransaction)
-		if err != nil {
-			srv.Warnf("%v", err)
-			newTransaction.Destroy()
-			return
-		}
-		log.Printf("Sent INVITE\n")
-		newTransaction.TuChan <- msg
-	loop:
-		for {
-			select {
-			case resp := <-respChan:
-				log.Printf("response is Recive")
-				log.Printf("%v vs %v", resp.StatusCode, sip.StatusOk)
-				if resp.StatusCode == sip.StatusOk {
-					log.Printf("response is 200 OK")
-					ack, err := sip.GenerateAckFromRequestAndResponse(msg, resp)
-					if ack != nil {
-						log.Printf("invalid ACK Message: %v", err)
-					}
-					log.Printf("Sent ACK: %v", ack)
-					srv.WriteMessage(ack)
-					break loop
-				} else {
-					continue
-				}
-			}
-		}
-		time.Sleep(time.Second * 30)
-		return
-	}
-}
-
 func main() {
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
 	sip.LogLevel = sip.LogDebug
-	// sip.LogLevel = sip.LogInfo
+	sip.LogLevel = sip.LogInfo
 	go func() {
 		for {
 			time.Sleep(time.Second * 5)
@@ -172,8 +180,10 @@ func main() {
 		}
 	}()
 
+	// sip.Timer100Try = 0 * time.Second
+
+	//sip.HandleFunc(sip.LayerSocket, "odd test", myhandler)
+	//sip.HandleFunc(sip.LayerParser, "odd test", myhandler)
 	sip.HandleFunc(sip.LayerCore, "odd test", mySipCoreHandler)
-	server := &sip.Server{Addr: ""}
-	go clientMain(server)
-	server.ListenAndServe()
+	sip.ListenAndServe("", nil)
 }

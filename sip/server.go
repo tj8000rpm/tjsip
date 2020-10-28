@@ -259,6 +259,7 @@ func (srv *Server) packetProcessing(ctx context.Context, buf []byte, size int, a
 			return
 		}
 		transaction = srv.lookupClientTransaction(query)
+		srv.Debugf("?[%v]=%v / %v", query, transaction, msg)
 	}
 
 	if transaction == nil {
@@ -273,7 +274,7 @@ func (srv *Server) packetProcessing(ctx context.Context, buf []byte, size int, a
 	}
 }
 
-func (s *Server) AddServerTransaction(msg *Message, transaction *ServerTransaction) error {
+func (s *Server) AddServerTransaction(transaction *ServerTransaction) error {
 	s.serverTransactions.Mu.Lock()
 	defer s.serverTransactions.Mu.Unlock()
 	if s.serverTransactions.Transactions == nil {
@@ -309,7 +310,7 @@ func (s *Server) DeleteServerTransaction(transaction *ServerTransaction) error {
 	return nil
 }
 
-func (s *Server) AddClientTransaction(msg *Message, transaction *ClientTransaction) error {
+func (s *Server) AddClientTransaction(transaction *ClientTransaction) error {
 	s.clientTransactions.Mu.Lock()
 	defer s.clientTransactions.Mu.Unlock()
 	key := transaction.Key
@@ -317,6 +318,7 @@ func (s *Server) AddClientTransaction(msg *Message, transaction *ClientTransacti
 		s.clientTransactions.Transactions = make(map[clientTransactionKey]*ClientTransaction)
 	}
 	s.clientTransactions.Transactions[*key] = transaction
+	s.Debugf("Client Transaction size: %d", len(s.clientTransactions.Transactions))
 	return nil
 }
 
@@ -352,7 +354,13 @@ func (s *Server) lookupServerTransaction(query *serverTransactionKey) Transactio
 func (s *Server) lookupClientTransaction(query *clientTransactionKey) Transaction {
 	s.clientTransactions.Mu.Lock()
 	defer s.clientTransactions.Mu.Unlock()
-	return nil
+	transaction, ok := s.clientTransactions.Transactions[*query]
+	if !ok {
+		// Transaction no found
+		return nil
+	}
+	// Transaction found
+	return transaction
 }
 
 func (s *Server) getDoneChan() <-chan struct{} {

@@ -97,23 +97,242 @@ type ClientTransaction struct {
 	BaseTransaction
 	Key     *clientTransactionKey
 	request *Message
+	ack     *Message
+	resChan chan *Message
+	toChan  chan *Message
 }
 
 func (t *ClientTransaction) Destroy() {
+	t.Mu.Lock()
+	close(t.resChan)
+	t.Mu.Unlock()
 	t.DestroyChanel()
 	t.Server.DeleteClientTransaction(t)
 }
 
 func (t *ClientTransaction) Handle(res *Message) {
+	t.resChan <- res
 }
 
-func (t *ClientTransaction) Controller(res *Message) {
+func (t *ClientTransaction) controllerTerminated() {
+	t.Server.Debugf("state to terminated in transacation %v", t.Key)
+	t.State = TransactionStateTerminated
+	t.Server.Debugf("[%v] Transaction was closed", t.Key)
+	t.Destroy()
+}
+
+func (t *ClientTransaction) inviteControllerCompleted() {
+	t.Server.Debugf("State to Completed")
+	t.State = TransactionStateCompleted
+	t.Server.WriteMessage(t.ack)
+	timerDChan := make(chan bool)
+	go func() {
+		t.Server.Debugf("[%v] Timer D Start", t.Key)
+		time.Sleep(TimerD)
+		timerDChan <- true
+	}()
+	for {
+		select {
+		case <-t.DelChan:
+			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			return
+		case <-timerDChan:
+			t.Server.Debugf("[%v] Timer D(%v) fire", t.Key, TimerD)
+			t.controllerTerminated()
+			return
+		case msg := <-t.resChan:
+			if msg == nil {
+				return
+			}
+			if msg.StatusCode >= 300 && msg.StatusCode < 700 {
+				t.Server.WriteMessage(t.ack)
+			}
+		}
+	}
+}
+
+func (t *ClientTransaction) inviteControllerProceeding() {
+	t.State = TransactionStateProceeding
+	for {
+		select {
+		case <-t.DelChan:
+			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			return
+		case msg := <-t.resChan:
+			if msg == nil {
+				return
+			}
+			t.Server.Debugf("[%v] Response from TU", t.Key)
+			if !msg.Response {
+				t.Destroy()
+				return
+			}
+			if msg.StatusCode >= 100 && msg.StatusCode < 700 && t.toChan != nil {
+				go func() {
+					t.toChan <- msg
+				}()
+			}
+			if msg.StatusCode >= 100 && msg.StatusCode < 200 {
+				continue
+			} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
+				t.controllerTerminated()
+				return
+			} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
+				ack, err := GenerateAckFromRequestAndResponse(t.request, msg)
+				if err != nil {
+					t.Server.Debugf("Unable to generate ACK Request / %v", err)
+					return
+				}
+				t.Mu.Lock()
+				t.ack = ack
+				t.Mu.Unlock()
+				t.inviteControllerCompleted()
+				return
+			}
+		}
+	}
+}
+
+func (t *ClientTransaction) inviteController() {
+	t.State = TransactionStateCalling
+	// Before sent INVITE
+	select {
+	case <-t.DelChan:
+		t.Server.Debugf("[%v] Recived delete signal", t.Key)
+		return
+	case msg := <-t.TuChan:
+		if !msg.Request && msg.Method != "INVITE" {
+			t.Err = ErrTransactionUnexpectedMessage
+			t.Destroy()
+			return
+		}
+		// transmit Initial first INVITE message
+		t.Server.Debugf("[%v] Transmit INVITE request from TU", t.Key)
+		t.Mu.Lock()
+		t.request = msg
+		t.Mu.Unlock()
+		t.Server.WriteMessage(msg)
+	}
+
+	timerA := TimerA
+	timerB := TimerB
+	// EnterCallingState
+	for {
+		t.Server.Debugf("Ready to response")
+		select {
+		case <-t.DelChan:
+			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			return
+		case <-time.After(timerA):
+			// retransmit final response
+			t.Server.Debugf("[%v] Timer A(%v) fire", t.Key, timerA)
+			t.Server.WriteMessage(t.request)
+			timerB -= timerA
+			timerA *= 2
+			continue
+		case <-time.After(timerB):
+			t.Server.Debugf("[%v] Timer B fire", t.Key)
+			t.controllerTerminated()
+			return
+		case msg := <-t.resChan:
+			if msg == nil {
+				return
+			}
+			t.Server.Debugf("[%v] Response from TU", t.Key)
+			if !msg.Response {
+				t.Destroy()
+				return
+			}
+
+			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
+				if t.toChan != nil {
+					go func() {
+						t.toChan <- msg
+					}()
+				}
+
+				if msg.StatusCode >= 200 && msg.StatusCode < 300 {
+					t.controllerTerminated()
+					return
+				} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
+					ack, err := GenerateAckFromRequestAndResponse(t.request, msg)
+					if err != nil {
+						t.Server.Debugf("Unable to generate ACK Request / %v", err)
+						return
+					}
+					t.Mu.Lock()
+					t.ack = ack
+					t.Mu.Unlock()
+					t.inviteControllerCompleted()
+				} else {
+					t.inviteControllerProceeding()
+					return
+				}
+			}
+		}
+	}
+
+}
+
+func (t *ClientTransaction) nonInviteController() {}
+
+func (t *ClientTransaction) Controller() {
+	if t.Invite {
+		t.inviteController()
+	} else {
+		t.nonInviteController()
+	}
+}
+
+func NewClientInviteTransaction(srv *Server, key *clientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
+	return newClientTransaction(srv, true, key, msg, respChan)
+}
+
+func NewClientNonInviteTransaction(srv *Server, key *clientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
+	return newClientTransaction(srv, false, key, msg, respChan)
+}
+
+func newClientTransaction(srv *Server, isInvite bool, key *clientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
+	trans := new(ClientTransaction)
+	trans.State = TransactionStateInit
+	trans.Invite = isInvite
+	trans.Server = srv
+	trans.TuChan = make(chan *Message)
+	trans.Err = nil
+	trans.DelChan = make(chan bool)
+	trans.Key = key
+	trans.request = msg
+	trans.resChan = make(chan *Message)
+	trans.toChan = respChan
+	go trans.Controller()
+	return trans
+}
+
+func GenerateClientTransactionKey(msg *Message) (*clientTransactionKey, error) {
+	var key *clientTransactionKey
+	_, _, params, err := msg.GetTopMostVia()
+	if err != nil {
+		// Malformed topmost via header
+		return nil, err
+	}
+	viaBranch, ok := params["branch"]
+	if !ok {
+		// Branch parameter not found
+		return nil, ErrHeaderParseError
+	}
+	method, _, err := msg.GetCSeq()
+	if err != nil {
+		// Malformed cseq header
+		return nil, err
+	}
+
+	key = &clientTransactionKey{viaBranch: viaBranch, cseqMethod: method}
+	return key, nil
 }
 
 /* ****************************************************
  * Server Transaction
  * ****************************************************/
-
 type serverTransactionKey struct {
 	viaBranch string
 	sentBy    string
@@ -270,7 +489,7 @@ func (t *ServerTransaction) inviteController() {
 
 	// Stage Procesing
 	for {
-		t.Server.Debugf("Rediy to next response")
+		t.Server.Debugf("Ready to next response")
 		select {
 		case <-t.DelChan:
 			t.Server.Debugf("[%v] Recived delete signal", t.Key)
@@ -446,8 +665,4 @@ func GenerateServerTransactionKey(msg *Message) (*serverTransactionKey, error) {
 	}
 	key = &serverTransactionKey{viaBranch: viaBranch, sentBy: sentBy, method: method}
 	return key, nil
-}
-
-func GenerateClientTransactionKey(msg *Message) (*clientTransactionKey, error) {
-	return nil, nil
 }

@@ -237,7 +237,6 @@ func (r *Message) Write(w io.Writer) error {
 }
 
 func (r *Message) writeResponse(w io.Writer) (err error) {
-
 	text := r.ReasonPhrase
 	if text == "" {
 		var ok bool
@@ -276,10 +275,42 @@ func (r *Message) writeResponse(w io.Writer) (err error) {
 
 	}
 	fmt.Fprintf(w, "\r\n")
+	// TODO: Write Body
 	return nil
-
 }
+
 func (r *Message) writeRequest(w io.Writer) (err error) {
+	if _, err := fmt.Fprintf(w, "%s %s SIP/%d.%d\r\n",
+		r.Method, r.RequestURI, r.ProtoMajor, r.ProtoMinor); err != nil {
+		return err
+	}
+
+	keys := make([]string, len(r.Header))
+	idx := 0
+	for key, _ := range r.Header {
+		keys[idx] = key
+		idx++
+	}
+	sort.Strings(keys)
+
+	//for key, header := range r.Header {
+	for _, key := range keys {
+		header := r.Header[key]
+		for _, value := range header {
+			switch key {
+			case "Cseq":
+				key = "CSeq"
+				break
+			case "Call-Id":
+				key = "Call-ID"
+				break
+			}
+			fmt.Fprintf(w, "%v: %v\r\n", key, value)
+		}
+
+	}
+	fmt.Fprintf(w, "\r\n")
+	// TODO: Write Body
 	return nil
 }
 
@@ -685,6 +716,13 @@ func (msg *Message) addTag(headerkey string) error {
 	return nil
 }
 
+func (msg *Message) AddFromTag() (err error) {
+	if err = msg.addTag("From"); err != nil {
+		err = msg.addTag("f")
+	}
+	return err
+}
+
 func (msg *Message) AddToTag() (err error) {
 	if err = msg.addTag("To"); err != nil {
 		err = msg.addTag("t")
@@ -727,6 +765,20 @@ func (msg *Message) GetTopMostVia() (proto, sentBy string, params map[string]str
 	return ViaParser(topmostvia)
 }
 
+func (msg *Message) GetCSeq() (cseqMethod string, cseqNum int, err error) {
+	cseq := msg.Header.Get("CSeq")
+	if cseq == "" {
+		return "", 0, ErrMissingMandatoryHeader
+	}
+	cseqItem := strings.SplitN(cseq, " ", 2)
+	cseqNum, err = strconv.Atoi(cseqItem[0])
+	if err != nil {
+		return "", 0, ErrHeaderParseError
+	}
+	cseqMethod = cseqItem[1]
+	return cseqMethod, cseqNum, nil
+}
+
 func copyValues(dst, src url.Values) {
 	for k, vs := range src {
 		dst[k] = append(dst[k], vs...)
@@ -756,17 +808,107 @@ func (r *Message) outgoingLength() int64 {
 	return -1
 }
 
-// requestMethodUsuallyLacksBody reports whether the given request
-// method is one that typically does not involve a request body.
-// This is used by the Transport (via
-// transferWriter.shouldSendChunkedRequestBody) to determine whether
-// we try to test-read a byte from a non-nil Request.Body when
-// Request.outgoingLength() returns -1. See the comments in
-// shouldSendChunkedRequestBody.
-func requestMethodUsuallyLacksBody(method string) bool {
-	switch method {
-	case "CANCEL", "HEAD", "ACK", "OPTIONS":
-		return true
+func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message, err error) {
+	ack = CreateMessage(req.RemoteAddr)
+	if res == nil || req == nil || ack == nil {
+		return nil, ErrMalformedMessage
 	}
-	return false
+	if !req.Request || !res.Response {
+		return nil, ErrMalformedMessage
+	}
+
+	ack.Response = false
+	ack.Request = true
+	ack.Method = "ACK"
+	ack.Proto = "SIP/2.0"
+	ack.ProtoMajor = 2
+	ack.ProtoMinor = 0
+	ack.Header = make(http.Header)
+
+	reqVia := req.Header.Values("Via")
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		ack.RequestURI = req.RequestURI
+		for idx, viaHeader := range reqVia {
+			if idx == 0 {
+				proto, sentBy, params, err := ViaParser(viaHeader)
+				if err != nil {
+					return nil, err
+				}
+				params["branch"] = GenerateBranchParam()
+				newVia := fmt.Sprintf("%s %s", proto, sentBy)
+				for key, val := range params {
+					newVia += fmt.Sprintf(";%s=%s", key, val)
+				}
+				ack.Header.Add("Via", newVia)
+			}
+			ack.Header.Add("Via", viaHeader)
+
+		}
+		copyFromRequestHeaders := []string{
+			"Call-ID",
+			"From",
+			"Max-Forward",
+		}
+		copyFromRequestHeadersIfPresent := []string{
+			"Route",
+		}
+		copyFromResponseHeaders := []string{
+			"To",
+		}
+		for _, key := range copyFromRequestHeaders {
+			ack.Header.Add(key, req.Header.Get(key))
+		}
+		for _, key := range copyFromRequestHeadersIfPresent {
+			value := req.Header.Get(key)
+			if value != "" {
+				ack.Header.Add(key, value)
+			}
+		}
+		for _, key := range copyFromResponseHeaders {
+			ack.Header.Add(key, res.Header.Get(key))
+		}
+	} else {
+		// TODO: No RFC comply implemantation
+		ack.RequestURI = res.Header.Get("Contact")
+		topmostvia := req.Header.Get("Via")
+		if topmostvia == "" {
+			return nil, ErrHeaderParseError
+		}
+		topmostvia = strings.Split(topmostvia, ",")[0]
+		ack.Header.Add("Via", topmostvia)
+
+		copyFromRequestHeaders := []string{
+			"Call-ID",
+			"From",
+			"Max-Forward",
+		}
+		copyFromRequestHeadersIfPresent := []string{
+			"Route",
+		}
+		copyFromResponseHeaders := []string{
+			"To",
+		}
+
+		for _, key := range copyFromRequestHeaders {
+			ack.Header.Add(key, req.Header.Get(key))
+		}
+		for _, key := range copyFromRequestHeadersIfPresent {
+			value := req.Header.Get(key)
+			if value != "" {
+				ack.Header.Add(key, value)
+			}
+		}
+		for _, key := range copyFromResponseHeaders {
+			ack.Header.Add(key, res.Header.Get(key))
+		}
+	}
+	_, cseqNum, err := req.GetCSeq()
+	if err != nil {
+		return nil, err
+	}
+	ack.Header.Add("CSeq", fmt.Sprintf("%d ACK", cseqNum))
+
+	ack.ctx = req.ctx //context.WithValue(req.ctx, CallIdContextKey, req.Header.Get("Call-ID"))
+
+	return ack, nil
 }
