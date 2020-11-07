@@ -3,6 +3,7 @@ package sip
 import (
 	"crypto/rand"
 	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -11,6 +12,7 @@ const (
 )
 
 var (
+	CallIdRandomLength          = 20
 	TagLenghtWithoutMagicCookie = 20
 	TagLength                   = 20
 )
@@ -55,4 +57,20 @@ func GenerateTag() string {
 		return ""
 	}
 	return ret
+}
+
+func GenerateCallID(localaddr string) string {
+	randStr, err := GenerateRandomString(CallIdRandomLength)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s@%s", randStr, localaddr)
+}
+
+func GenerateInitCSeq() (int64, error) {
+	ret, err := rand.Int(rand.Reader, big.NewInt(2<<31))
+	if err != nil {
+		return 0, err
+	}
+	return ret.Int64(), nil
 }

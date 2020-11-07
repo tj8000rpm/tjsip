@@ -30,6 +30,10 @@ var (
 	TimerC = 3 * time.Minute
 )
 
+var (
+	InitMaxForward = 70
+)
+
 var LogLevel = LogWarn
 
 func IsCallEstablished(callStatus int) bool {

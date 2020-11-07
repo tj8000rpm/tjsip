@@ -593,14 +593,6 @@ func ReadMessage(req *Message, b *bufio.Reader) error {
 	return readMessage(req, b)
 }
 
-func CreateMessage(addr string) (msg *Message) {
-	msg = new(Message)
-	if msg != nil {
-		msg.RemoteAddr = addr
-	}
-	return msg
-}
-
 func readMessage(msg *Message, b *bufio.Reader) (err error) {
 	tp := newTextprotoReader(b)
 
@@ -681,8 +673,6 @@ func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
 	resp.Proto = "SIP/2.0"
 	resp.ProtoMajor = 2
 	resp.ProtoMinor = 0
-
-	resp.Header = make(http.Header)
 
 	for _, key := range responseMandatoryHeaders {
 		//for key, headers := range msg.Header {
@@ -809,21 +799,13 @@ func (r *Message) outgoingLength() int64 {
 }
 
 func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message, err error) {
-	ack = CreateMessage(req.RemoteAddr)
+	ack = CreateACK(req.RemoteAddr)
 	if res == nil || req == nil || ack == nil {
 		return nil, ErrMalformedMessage
 	}
 	if !req.Request || !res.Response {
 		return nil, ErrMalformedMessage
 	}
-
-	ack.Response = false
-	ack.Request = true
-	ack.Method = "ACK"
-	ack.Proto = "SIP/2.0"
-	ack.ProtoMajor = 2
-	ack.ProtoMinor = 0
-	ack.Header = make(http.Header)
 
 	reqVia := req.Header.Values("Via")
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
@@ -911,4 +893,36 @@ func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message
 	ack.ctx = req.ctx //context.WithValue(req.ctx, CallIdContextKey, req.Header.Get("Call-ID"))
 
 	return ack, nil
+}
+
+func CreateMessage(addr string) (msg *Message) {
+	msg = new(Message)
+	if msg != nil {
+		msg.RemoteAddr = addr
+	}
+	msg.Proto = "SIP/2.0"
+	msg.ProtoMajor = 2
+	msg.ProtoMinor = 0
+
+	msg.Header = make(http.Header)
+	return msg
+}
+
+func CreateRequest(addr string) (msg *Message) {
+	msg = CreateMessage(addr)
+	msg.Request = true
+	return msg
+}
+
+func CreateINVITE(addr, ruri string) (msg *Message) {
+	msg = CreateRequest(addr)
+	msg.Method = "INVITE"
+	msg.RequestURI = ruri
+	return msg
+}
+
+func CreateACK(addr string) (msg *Message) {
+	msg = CreateRequest(addr)
+	msg.Method = "ACK"
+	return msg
 }

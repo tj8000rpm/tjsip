@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,9 @@ func (b *atomicBool) setFalse()   { atomic.StoreInt32((*int32)(b), 0) }
 // -----------------------------------------------------
 type Server struct {
 	Conn *net.UDPConn
+
+	Host string
+	AoR  string
 
 	// Addr optionally specifies the TCP address for the server to listen on,
 	// in the form "host:port". If empty, ":sip" (port 5060) is used.
@@ -488,6 +492,39 @@ func (srv *Server) ListenAndServe() error {
 
 func (s *Server) shuttingDown() bool {
 	return s.inShutdown.isSet()
+}
+
+/* Server Message Helper */
+
+func (srv *Server) CreateIniINVITE(addr, ruri, contact string) (msg *Message) {
+	initCSeq, err := GenerateInitCSeq()
+	if err != nil {
+		return nil
+	}
+	msg = CreateINVITE(addr, ruri)
+	localAddr := srv.Conn.LocalAddr().String()
+	physHost := localAddr
+	aorDomain := localAddr
+	if srv.Host != "" {
+		localAddr = srv.Host
+	}
+	if srv.AoR != "" {
+		parsedAor, err := url.Parse(srv.AoR)
+		if err != nil {
+			return nil
+		}
+		aorDomain = parsedAor.Host
+	}
+	_ = physHost
+	_ = aorDomain
+	srv.Conn.RemoteAddr()
+	msg.Header.Add("To", ruri)
+	msg.Header.Add("Max-Forward", fmt.Sprintf("%d", InitMaxForward))
+	msg.Header.Add("CSeq", fmt.Sprintf("%d INVITE", initCSeq))
+	msg.Header.Add("Call-ID", GenerateCallID(localAddr))
+	via := fmt.Sprintf("SIP/2.0/UDP 127.0.0.1:5060;branch=%s", GenerateBranchParam())
+	msg.Header.Add("Via", via)
+	return msg
 }
 
 // -----------------------------------------------------
