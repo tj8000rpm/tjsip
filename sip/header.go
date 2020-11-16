@@ -65,8 +65,12 @@ type NameAddr struct {
 func (addr *NameAddr) String() string {
 	noDisplayName := addr.DisplayName == ""
 	noUriParameters := addr.Uri.RawParameter == ""
+	noSpecialCharacterInURI := validToken(addr.Uri.User.String()) && validToken(addr.Uri.Host)
 
 	if noDisplayName && noUriParameters {
+		if !noSpecialCharacterInURI {
+			return fmt.Sprintf("<%s>", addr.Uri)
+		}
 		return fmt.Sprintf("%s", addr.Uri)
 	} else if noDisplayName {
 		return fmt.Sprintf("<%s>", addr.Uri)
@@ -76,6 +80,69 @@ func (addr *NameAddr) String() string {
 		displayNameStr = "\"" + displayNameStr + "\""
 	}
 	return fmt.Sprintf("%s <%s>", displayNameStr, addr.Uri)
+}
+
+func NewNameAddr(display string, uri *URI) *NameAddr {
+	n := new(NameAddr)
+	if n == nil {
+		return nil
+	}
+	n.DisplayName = strings.Trim(display, " \t\r\n")
+	n.Uri = uri
+	return n
+}
+
+func NewNameAddrUriString(display, uristr string) *NameAddr {
+	uri, err := Parse(strings.Trim(uristr, " \t\r\n"))
+	if err != nil {
+		return nil
+	}
+	return NewNameAddr(display, uri)
+}
+
+func ParseNameAddr(s string) (n *NameAddr, trail string) {
+	sLen := len(s)
+
+	display := ""
+	ds := 0
+	de := -1
+	uriStr := ""
+	us := 0
+	ue := len(s)
+
+	innerLtGt := false
+	innerQuated := false
+	var pc byte
+
+	for idx := 0; idx < sLen; idx++ {
+		c := s[idx]
+		if c == '<' && !innerQuated && !innerLtGt {
+			de = idx
+			us = idx + 1
+			innerLtGt = true
+		} else if c == '>' && !innerQuated && innerLtGt {
+			ue = idx
+			innerLtGt = false
+			break
+		} else if c == '"' && pc != '\\' {
+			innerQuated = !innerQuated
+		}
+		pc = c
+	}
+
+	if ds < de {
+		display = strings.Trim(s[ds:de], " \"")
+	}
+	if us < ue {
+		uriStr = strings.Trim(s[us:ue], " <>")
+	}
+	if innerQuated || innerLtGt {
+		return
+	}
+	trail = strings.Trim(s[ue:], " <>")
+	n = NewNameAddrUriString(display, uriStr)
+
+	return
 }
 
 /********************************
@@ -97,6 +164,30 @@ func (t *To) String() string {
 func (t *To) Parameter() url.Values {
 	v, _ := url.ParseQuery(t.RawParameter)
 	return v
+}
+
+func NewToHeader(addr *NameAddr, rawParam string) *To {
+	t := new(To)
+	if t == nil {
+		return nil
+	}
+	t.Addr = addr
+	t.RawParameter = strings.Trim(rawParam, " \t\r\n;")
+	return t
+}
+func NewFromHeader(addr *NameAddr, rawParam string) *From {
+	return NewToHeader(addr, rawParam)
+}
+
+func NewToHeaderFromString(display, uri, rawParam string) *To {
+	addr := NewNameAddrUriString(display, uri)
+	if addr == nil {
+		return nil
+	}
+	return NewToHeader(addr, rawParam)
+}
+func NewFromHeaderFromString(display, uri, rawParam string) *From {
+	return NewToHeaderFromString(display, uri, rawParam)
 }
 
 /********************************
@@ -143,6 +234,70 @@ func (v *Via) String() string {
 	return v.SentProtocol + " " + v.SentBy + param
 }
 
+func NewViaHeader(proto, by, param string) *Via {
+	v := new(Via)
+	if v == nil {
+		return nil
+	}
+	v.SentProtocol = strings.Trim(proto, " \t\r\n")
+	v.SentBy = strings.Trim(by, " \t\r\n")
+	v.RawParameter = strings.Trim(param, " \t\r\n;")
+	return v
+}
+func NewViaHeaderUDP(by, param string) *Via {
+	return NewViaHeader("SIP/2.0/UDP", by, param)
+}
+func NewViaHeaderTCP(by, param string) *Via {
+	return NewViaHeader("SIP/2.0/TCP", by, param)
+}
+
+type ViaHeaders struct {
+	Header []*Via
+}
+
+func (v *ViaHeaders) Insert(via *Via) bool {
+	before := len(v.Header)
+	v.Header = append(v.Header, via)
+	return before < len(v.Header)
+}
+
+func (v *ViaHeaders) TopMost() *Via {
+	return v.Get(0)
+}
+
+func (v *ViaHeaders) Get(index int) *Via {
+	lastindex := len(v.Header) - 1
+	if index > lastindex || index < 0 {
+		return nil
+	}
+	return v.Header[lastindex-index]
+}
+
+func (v *ViaHeaders) Length() int {
+	return len(v.Header)
+}
+
+func (v *ViaHeaders) WriteHeader() string {
+	str := ""
+	key := "Via: "
+	if UseCompactForm {
+		key = "v: "
+	}
+	for i := len(v.Header) - 1; i >= 0; i-- {
+		str += key + v.Header[i].String() + "\r\n"
+	}
+	return str
+}
+
+func NewViaHeaders() *ViaHeaders {
+	v := new(ViaHeaders)
+	if v == nil {
+		return nil
+	}
+	v.Header = make([]*Via, 0)
+	return v
+}
+
 /********************************
 * CSeq Header
 ********************************/
@@ -177,6 +332,18 @@ func (c *CSeq) String() string {
 	return s + " " + c.Method
 }
 
+func NewCSeqHeader(method string) *CSeq {
+	c := new(CSeq)
+	if c == nil {
+		return nil
+	}
+	c.Method = strings.Trim(method, " \t\r\n")
+	if ok := c.Init(); !ok {
+		return nil
+	}
+	return c
+}
+
 /********************************
 * CallID Header
 ********************************/
@@ -208,6 +375,19 @@ func (c *CallID) String() string {
 	return c.Identifier
 }
 
+func NewCallIDHeader() *CallID {
+	return NewCallIDHeaderWithAddr("")
+}
+
+func NewCallIDHeaderWithAddr(localAddr string) *CallID {
+	c := new(CallID)
+	if c == nil {
+		return nil
+	}
+	c.InitH(strings.Trim(localAddr, " \t\r\n"))
+	return c
+}
+
 /********************************
 * MaxForwards Header
 ********************************/
@@ -226,6 +406,15 @@ func (m *MaxForwards) Decrement() bool {
 
 func (m *MaxForwards) String() string {
 	return strconv.Itoa(m.Remains)
+}
+
+func NewMaxForwardsHeader() *MaxForwards {
+	m := new(MaxForwards)
+	if m == nil {
+		return nil
+	}
+	m.Remains = InitMaxForward
+	return m
 }
 
 /********************************
@@ -250,4 +439,98 @@ func (c *Contact) String() string {
 func (c *Contact) Parameter() url.Values {
 	v, _ := url.ParseQuery(c.RawParameter)
 	return v
+}
+
+func newContactHeader(nameAddr *NameAddr, param string, isStar bool) *Contact {
+	c := new(Contact)
+	if c == nil {
+		return nil
+	}
+	if isStar || (nameAddr != nil && nameAddr.Uri.Path == "*") {
+		c.Star = true
+		return c
+	}
+	c.Addr = nameAddr
+	c.RawParameter = strings.Trim(param, " \t\r\n;")
+	return c
+}
+
+func NewContactHeader(display string, uri *URI, param string, isStar bool) *Contact {
+	return newContactHeader(NewNameAddr(display, uri), param, isStar)
+}
+
+func NewContactHeaderFromString(display, uristr, param string) *Contact {
+	if strings.Trim(uristr, " \t\r\n") == "*" {
+		return NewContactHeader("", nil, "", true)
+	}
+	uri, err := Parse(uristr)
+	if err != nil {
+		return nil
+	}
+	return NewContactHeader(display, uri, param, false)
+}
+
+func NewContactHeaderStar() *Contact {
+	return NewContactHeader("", nil, "", true)
+}
+
+func ParseContacts(s string, cons *ContactHeaders) error {
+	if cons == nil {
+		return ErrHeaderParseError
+	}
+	if s == "" {
+		return nil
+	}
+	nameAddr, trail := ParseNameAddr(s)
+
+	res := strings.SplitN(trail, ",", 2)
+	rawParam := strings.Trim(res[0], " \t;")
+	if len(res) == 2 {
+		trail = strings.Trim(res[1], " \t")
+	} else {
+		trail = ""
+	}
+
+	c := newContactHeader(nameAddr, rawParam, false)
+	if cons.Add(c) {
+		return ParseContacts(trail, cons)
+	}
+	return nil
+}
+
+func ParseContact(s string) *Contact {
+	nameAddr, rawParam := ParseNameAddr(s)
+	rawParam = strings.Trim(rawParam, " ;")
+	return newContactHeader(nameAddr, rawParam, false)
+}
+
+type ContactHeaders struct {
+	Header []*Contact
+}
+
+func NewContactHeaders() *ContactHeaders {
+	c := new(ContactHeaders)
+	if c == nil {
+		return nil
+	}
+	c.Header = make([]*Contact, 0)
+	return c
+}
+
+func (c *ContactHeaders) Add(con *Contact) bool {
+	before := len(c.Header)
+	c.Header = append(c.Header, con)
+	return before < len(c.Header)
+}
+
+func (c *ContactHeaders) WriteHeader() string {
+	str := ""
+	key := "Contact: "
+	if UseCompactForm {
+		key = "c: "
+	}
+	for i := 0; i < len(c.Header); i++ {
+		str += key + c.Header[i].String() + "\r\n"
+	}
+	return str
 }

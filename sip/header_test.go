@@ -24,6 +24,23 @@ func TestNameAddrString(t *testing.T) {
 	}
 }
 
+func TestNameAddrStringWithoutDisplayname(t *testing.T) {
+	// sip:alice@atlanta.com
+	uri, err := Parse("sip:alice@atlanta.com")
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+	}
+	nameAddr := &NameAddr{
+		Uri: uri,
+	}
+
+	actual := fmt.Sprintf("%s", nameAddr)
+	expect := "sip:alice@atlanta.com"
+	if actual != expect {
+		t.Errorf("Not valid NameAddrString: expect %s, but given '%s'", expect, actual)
+	}
+}
+
 func TestNameAddrStringQuoatedDisplayname(t *testing.T) {
 	// "Mr. Watson" <sip:watson@worcester.bell-telephone.com>
 	uri, err := Parse("sip:watson@worcester.bell-telephone.com")
@@ -74,6 +91,141 @@ func TestNameAddrStringWithDisplaynameAnParam(t *testing.T) {
 	expect := "\"Mr. Watson\" <sip:alice@atlanta.com;user=phone>"
 	if actual != expect {
 		t.Errorf("Not valid NameAddrString: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNameAddrStringWithDisplaynameUTF8(t *testing.T) {
+	// "Mr. Watson" <sip:alice@atlanta.com;user=phone>
+	uri, err := Parse("sip:alice@atlanta.com;user=phone")
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+	}
+	nameAddr := &NameAddr{
+		Uri:         uri,
+		DisplayName: "こんにちわ",
+	}
+
+	actual := fmt.Sprintf("%s", nameAddr)
+	expect := "\"こんにちわ\" <sip:alice@atlanta.com;user=phone>"
+	if actual != expect {
+		t.Errorf("Not valid NameAddrString: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNameAddrStringUserInfoSpecialChar(t *testing.T) {
+	// "Mr. Watson" <sip:alice@atlanta.com;user=phone>
+	uri, err := Parse("sip:alice;test@atlanta.com;user=phone")
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+	}
+	nameAddr := &NameAddr{
+		Uri: uri,
+	}
+
+	actual := fmt.Sprintf("%s", nameAddr)
+	expect := "<sip:alice;test@atlanta.com;user=phone>"
+	if actual != expect {
+		t.Errorf("Not valid NameAddrString: expect %s, but given '%s'", expect, actual)
+	}
+
+	uri, err = Parse("sip:+81312345678;npdi;rn=+8134512345@example.ne.jp;user=phone")
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+	}
+	nameAddr.Uri = uri
+	actual = fmt.Sprintf("%s", nameAddr)
+	expect = "<sip:+81312345678;npdi;rn=+8134512345@example.ne.jp;user=phone>"
+	if actual != expect {
+		t.Errorf("Not valid NameAddrString: expect %s, but given '%s'", expect, actual)
+	}
+
+}
+
+func TestNewNameAddr(t *testing.T) {
+	uri := &URI{
+		Scheme:       "sip",
+		Host:         "atlanta.com",
+		User:         url.User("alice"),
+		RawParameter: "user=phone",
+	}
+
+	c := NewNameAddr("Alice", uri)
+
+	if actual, expect := c.DisplayName, "Alice"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.Scheme, "sip"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.Host, "atlanta.com"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.User.String(), "alice"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.RawParameter, "user=phone"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNewNameAddrUriString(t *testing.T) {
+	c := NewNameAddrUriString("Alice", "sip:alice@atlanta.com;user=phone")
+	if actual, expect := c.DisplayName, "Alice"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.Scheme, "sip"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.Host, "atlanta.com"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.User.String(), "alice"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Uri.RawParameter, "user=phone"; actual != expect {
+		t.Errorf("Not valid NameAddr Constractor: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNewNameAddrStringCaseOfUserinfoSpecialCharacter(t *testing.T) {
+	c := NewNameAddrUriString("", "sip:alice;foo=bar@atlanta.com")
+	if actual, expect := c.String(), "<sip:alice;foo=bar@atlanta.com>"; actual != expect {
+		t.Errorf("Not valid String(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func subTestParseNameAddrString(t *testing.T, s, d, u, e string) {
+	n, trail := ParseNameAddr(s)
+	if n == nil {
+		t.Errorf("Contact still nil")
+		return
+	}
+	if actual, expect := n.DisplayName, d; actual != expect {
+		t.Errorf("Not valid DisplayName: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := n.Uri.String(), u; actual != expect {
+		t.Errorf("Not valid URI: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := trail, e; actual != expect {
+		t.Errorf("Not valid trail value: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestParseNameAddr(t *testing.T) {
+	s := "Alice <sip:alice;isub=123@atlanta.com:5060;user=phone>;tag=123"
+	subTestParseNameAddrString(t, s, "Alice", "sip:alice;isub=123@atlanta.com:5060;user=phone", ";tag=123")
+	s = "\"Alice Alice\"<sip:alice;isub=123@atlanta.com:5060;user=phone>"
+	subTestParseNameAddrString(t, s, "Alice Alice", "sip:alice;isub=123@atlanta.com:5060;user=phone", "")
+	s = "sip:alice@atlanta.com:5060"
+	subTestParseNameAddrString(t, s, "", "sip:alice@atlanta.com:5060", "")
+
+	s = "invalid@@ string <!!;;>>>>>!<<!"
+	subTestParseNameAddrString(t, s, "invalid@@ string", "!!;;", "!<<!")
+
+	s = "invalid@@ string !!;;>>>>>!<<<!"
+	n, _ := ParseNameAddr(s)
+	if n != nil {
+		t.Errorf("Name Addr will be nil")
 	}
 }
 
@@ -135,6 +287,71 @@ func TestToParameter(t *testing.T) {
 	}
 }
 
+func TestFromParameter(t *testing.T) {
+	from := &From{
+		RawParameter: "tag=123123;key=value",
+	}
+
+	if actual, expect := from.Parameter().Get("tag"), "123123"; actual != expect {
+		t.Errorf("Not valid Parameter(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := from.Parameter().Get("key"), "value"; actual != expect {
+		t.Errorf("Not valid Parameter(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestToFromConstractor(t *testing.T) {
+	addr := &NameAddr{
+		Uri: &URI{
+			Scheme:       "sip",
+			Host:         "atlanta.com",
+			User:         url.User("alice"),
+			RawParameter: "user=phone",
+		},
+		DisplayName: "Alice",
+	}
+	param := "tag=123123"
+	to := NewToHeader(addr, param)
+	from := NewFromHeader(addr, param)
+	var nilTo *To = nil
+	var nilFrom *From = nil
+
+	if actual, expect := to, nilTo; actual == expect {
+		t.Errorf("Not valid Constractor: unexpected %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := to.RawParameter, "tag=123123"; actual != expect {
+		t.Errorf("Not valid Constractor unseted Params: expect %s, but given '%s'", expect, actual)
+	}
+
+	if actual, expect := from, nilFrom; actual == expect {
+		t.Errorf("Not valid Constractor: unexpected %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := from.RawParameter, "tag=123123"; actual != expect {
+		t.Errorf("Not valid Constractor unseted Params: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestToFromConstractorString(t *testing.T) {
+	to := NewToHeaderFromString("Bob", "sip:bob@biloxi.com", "")
+	from := NewFromHeaderFromString("Alice", "sip:alice@atlanta.com;user=phone", "tag=123123")
+	var nilTo *To = nil
+	var nilFrom *From = nil
+
+	if actual, expect := to, nilTo; actual == expect {
+		t.Errorf("Not valid Constractor: unexpected %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := to.RawParameter, ""; actual != expect {
+		t.Errorf("Not valid Constractor unseted Params: expect %s, but given '%s'", expect, actual)
+	}
+
+	if actual, expect := from, nilFrom; actual == expect {
+		t.Errorf("Not valid Constractor: unexpected %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := from.RawParameter, "tag=123123"; actual != expect {
+		t.Errorf("Not valid Constractor unseted Params: expect %s, but given '%s'", expect, actual)
+	}
+}
+
 /**********************************
 * Via header
 **********************************/
@@ -186,6 +403,77 @@ func TestViaSetProtocol(t *testing.T) {
 
 	if actual, expect := v.SentProtocol, "SIP/2.0/UDP"; actual != expect {
 		t.Errorf("Not valid Via SetSentProtocol(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestViaConstractor(t *testing.T) {
+	v := NewViaHeader("SIP/2.0/HTTP", "127.0.0.1", "key=value")
+
+	if actual, expect := v.SentProtocol, "SIP/2.0/HTTP"; actual != expect {
+		t.Errorf("Not valid Via Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.SentBy, "127.0.0.1"; actual != expect {
+		t.Errorf("Not valid Via Constractor: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.RawParameter, "key=value"; actual != expect {
+		t.Errorf("Not valid Via Constractor: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestViaConstractorUDP(t *testing.T) {
+	v := NewViaHeaderUDP("127.0.0.1", "key=value")
+	if actual, expect := v.SentProtocol, "SIP/2.0/UDP"; actual != expect {
+		t.Errorf("Not valid Via Constractor: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestViaConstractorTCP(t *testing.T) {
+	v := NewViaHeaderTCP("127.0.0.1", "key=value")
+	if actual, expect := v.SentProtocol, "SIP/2.0/TCP"; actual != expect {
+		t.Errorf("Not valid Via Constractor: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNewViaHeaders(t *testing.T) {
+	v := NewViaHeaders()
+	var viasNil *ViaHeaders = nil
+	if actual, expect := v, viasNil; actual == expect {
+		t.Errorf("Not valid ViaHeaders Constractor: unexpected %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := len(v.Header), 0; actual != expect {
+		t.Errorf("Not valid ViaHeaders Constractor: unexpected %v, but given '%v'", expect, actual)
+	}
+	if via := v.TopMost(); via != nil {
+		t.Errorf("Invalid top most via")
+	}
+	if ok := v.Insert(NewViaHeaderUDP("127.0.0.1", "key=value")); !ok {
+		t.Errorf("Via Header append Error")
+	}
+	if via := v.TopMost(); via.SentBy != "127.0.0.1" || via.RawParameter != "key=value" {
+		t.Errorf("Invalid top most via")
+	}
+	if ok := v.Insert(NewViaHeaderUDP("10.0.0.1", "foo=bar")); !ok {
+		t.Errorf("Via Header append Error")
+	}
+	if via := v.TopMost(); via.SentBy != "10.0.0.1" || via.RawParameter != "foo=bar" {
+		t.Errorf("Invalid top most via")
+	}
+	if via := v.Get(1); via.SentBy != "127.0.0.1" || via.RawParameter != "key=value" {
+		t.Errorf("Invalid get via")
+	}
+	if via := v.Get(2); via != nil {
+		t.Errorf("Invalid get via")
+	}
+	if via := v.Get(-552); via != nil {
+		t.Errorf("Invalid get via")
+	}
+	if via := v.Length(); via != 2 {
+		t.Errorf("Invalid Length() via")
+	}
+	expect := "Via: SIP/2.0/UDP 10.0.0.1;foo=bar\r\nVia: SIP/2.0/UDP 127.0.0.1;key=value\r\n"
+	actual := v.WriteHeader()
+	if actual != expect {
+		t.Errorf("Invalid WriteHeader func\n expeect-----\n '%v', but given ----\n '%v'", expect, actual)
 	}
 }
 
@@ -255,6 +543,16 @@ func TestCSeqInit(t *testing.T) {
 	}
 }
 
+func TestCSeqConstractor(t *testing.T) {
+	c := NewCSeqHeader("OPTIONS")
+	if actual := c.Sequence; !(int64(0) <= actual && actual < int64(2<<31)) {
+		t.Errorf("Not valid CSeq Constractor: unexpected range sequence must be 0 <= %d < 2**31", actual)
+	}
+	if actual, expect := c.Method, "OPTIONS"; actual != expect {
+		t.Errorf("Not valid CSeq Constractor: unexpected %s, but given '%s'", expect, actual)
+	}
+}
+
 /********************************
 * CallID Header
 ********************************/
@@ -317,6 +615,16 @@ func TestCallIDInitH(t *testing.T) {
 	}
 }
 
+func TestCallIDConstractor(t *testing.T) {
+	c := NewCallIDHeaderWithAddr("127.0.0.1")
+	if actual, expect := c.Host, "127.0.0.1"; actual != expect {
+		t.Errorf("Not valid CallID Constractor: expected %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.Identifier, ""; actual == expect {
+		t.Errorf("Not valid CallID Constractor: unexpected %s, but given '%s'", expect, actual)
+	}
+}
+
 /**********************************
 * MaxForwards header
 **********************************/
@@ -358,6 +666,13 @@ func TestMaxForwardsDecrementNotOK(t *testing.T) {
 	}
 }
 
+func TestMaxForwardsConstractor(t *testing.T) {
+	c := NewMaxForwardsHeader()
+	if actual, expect := c.Remains, InitMaxForward; actual != expect {
+		t.Errorf("Not valid MaxForwards Constractor: expected %v, but given '%v'", expect, actual)
+	}
+}
+
 /********************************
 * Contact Header
 ********************************/
@@ -386,10 +701,8 @@ func TestContactStringStar(t *testing.T) {
 		Star: true,
 		Addr: &NameAddr{
 			Uri: &URI{
-				Scheme:       "sip",
-				Host:         "atlanta.com",
-				User:         url.User("alice"),
-				RawParameter: "user=phone",
+				Scheme: "sip",
+				Host:   "atlanta.com", User: url.User("alice"), RawParameter: "user=phone",
 			},
 			DisplayName: "Alice",
 		},
@@ -421,5 +734,152 @@ func TestContactParameter(t *testing.T) {
 	}
 	if actual, expect := c.Parameter().Get("q"), "1.000"; actual != expect {
 		t.Errorf("Not valid Parameter(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNewContactHeader(t *testing.T) {
+	uri := &URI{
+		Scheme:       "sip",
+		Host:         "atlanta.com",
+		User:         url.User("alice"),
+		RawParameter: "user=phone",
+	}
+	c := NewContactHeader("Alice", uri, ";expires=3600;q=1.000  ", false)
+	if actual, expect := c.String(), "Alice <sip:alice@atlanta.com;user=phone>;expires=3600;q=1.000"; actual != expect {
+		t.Errorf("Not valid Contact String(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNewContactHeaderFrmString(t *testing.T) {
+	c := NewContactHeaderFromString("Alice", "sip:alice@atlanta.com;user=phone", "expires=3600;q=1.000")
+	if actual, expect := c.String(), "Alice <sip:alice@atlanta.com;user=phone>;expires=3600;q=1.000"; actual != expect {
+		t.Errorf("Not valid Contact String(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNewContactHeaderFrmStringStar(t *testing.T) {
+	c := NewContactHeaderFromString("Alice", "*", "expires=3600;q=1.000")
+	if actual, expect := c.String(), "*"; actual != expect {
+		t.Errorf("Not valid Contact String(): expect %s, but given '%s'", expect, actual)
+	}
+	c = NewContactHeaderFromString("Alice", " * ", "expires=3600;q=1.000")
+	if actual, expect := c.String(), "*"; actual != expect {
+		t.Errorf("Not valid Contact String(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestNewContactHeaderStar(t *testing.T) {
+	c := NewContactHeaderStar()
+	if actual, expect := c.String(), "*"; actual != expect {
+		t.Errorf("Not valid Contact String(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func subTestParseContactString(t *testing.T, s, d, p string) {
+	c := ParseContact(s)
+	if c == nil {
+		t.Errorf("Contact still nil")
+		return
+	}
+	if actual, expect := c.Star, false; actual != expect {
+		t.Errorf("Not valid Contact Star: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := c.Addr.DisplayName, d; actual != expect {
+		t.Errorf("Not valid Contact DisplayName: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := c.RawParameter, p; actual != expect {
+		t.Errorf("Not valid Contact RawParameter: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestParseContact(t *testing.T) {
+	s := "Alice <sip:alice;isub=123@atlanta.com:5060;usre=phone>;expires=3600;q=1.000"
+	subTestParseContactString(t, s, "Alice", "expires=3600;q=1.000")
+	s = "\"Alice Alice\"<sip:alice;isub=123@atlanta.com:5060;usre=phone>"
+	subTestParseContactString(t, s, "Alice Alice", "")
+	s = "sip:alice@atlanta.com:5060"
+	subTestParseContactString(t, s, "", "")
+	c := ParseContact("*")
+	if actual, expect := c.Star, true; actual != expect {
+		t.Errorf("Not valid Contact Star: expect %v, but given '%v'", expect, actual)
+	}
+}
+
+func TestParseContacts(t *testing.T) {
+	c := NewContactHeaders()
+	s := ("\"Mr. Watson\" <sip:watson@worcester.bell-telephone.com> ;q=0.7; " +
+		"expires=3600, \"Mr. Watson\" <mailto:watson@bell-telephone.com> ;q=0.1")
+	ParseContacts(s, c)
+	if c == nil {
+		t.Errorf("Contacts still nil")
+		return
+	}
+	if len(c.Header) != 2 {
+		t.Errorf("Contacts length is not valid")
+		return
+	}
+	sipc := c.Header[0]
+	if actual, expect := sipc.Addr.DisplayName, "Mr. Watson"; actual != expect {
+		t.Errorf("Not valid Contact DisplayName: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc.Addr.Uri.String(), "sip:watson@worcester.bell-telephone.com"; actual != expect {
+		t.Errorf("Not valid Contact URI: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc.RawParameter, "q=0.7; expires=3600"; actual != expect {
+		t.Errorf("Not valid Contact RawParameter: expect %v, but given '%v'", expect, actual)
+	}
+	mailc := c.Header[1]
+	if actual, expect := mailc.Addr.DisplayName, "Mr. Watson"; actual != expect {
+		t.Errorf("Not valid Contact DisplayName: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := mailc.Addr.Uri.String(), "mailto:watson@bell-telephone.com"; actual != expect {
+		t.Errorf("Not valid Contact URI: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := mailc.RawParameter, "q=0.1"; actual != expect {
+		t.Errorf("Not valid Contact RawParameter: expect %v, but given '%v'", expect, actual)
+	}
+}
+
+func TestParseContactsOnlyOneEntry(t *testing.T) {
+	c := NewContactHeaders()
+	s := ("\"Mr. Watson\" <sip:watson@worcester.bell-telephone.com> ;q=0.7; expires=3600")
+	ParseContacts(s, c)
+	if c == nil {
+		t.Errorf("Contacts still nil")
+		return
+	}
+	if len(c.Header) != 1 {
+		t.Errorf("Contacts length is not valid")
+		return
+	}
+	sipc := c.Header[0]
+	if actual, expect := sipc.Addr.DisplayName, "Mr. Watson"; actual != expect {
+		t.Errorf("Not valid Contact DisplayName: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc.Addr.Uri.String(), "sip:watson@worcester.bell-telephone.com"; actual != expect {
+		t.Errorf("Not valid Contact URI: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc.RawParameter, "q=0.7; expires=3600"; actual != expect {
+		t.Errorf("Not valid Contact RawParameter: expect %v, but given '%v'", expect, actual)
+	}
+}
+
+func TestNewContactHeaders(t *testing.T) {
+	c := NewContactHeaders()
+	if actual := c; actual == nil {
+		t.Errorf("ContactHeaders still nil")
+		return
+	}
+	if actual := c.Header; actual == nil {
+		t.Errorf("ContactHeaders Header still nil")
+	}
+	if actual, expect := len(c.Header), 0; actual != expect {
+		t.Errorf("ContactHeaders Header length is not 0")
+	}
+	if ok := c.Add(NewContactHeaderStar()); !ok {
+		t.Errorf("ContactHeaders Header Add fail")
+	}
+	if actual, expect := len(c.Header), 1; actual != expect {
+		t.Errorf("ContactHeaders Header length is not 1")
 	}
 }

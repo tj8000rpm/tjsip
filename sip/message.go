@@ -8,16 +8,13 @@ package sip
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
-	urlpkg "net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,12 +33,13 @@ var (
 
 func badStringError(what, val string) error { return fmt.Errorf("%s %q", what, val) }
 
-var responseMandatoryHeaders = []string{
+var mandatoryHeaders = []string{
 	"From",
+	"To",
 	"Call-ID",
 	"CSeq",
 	"Via",
-	"To",
+	"Max-Forwards",
 }
 
 // A Request represents an SIP request received by a server
@@ -51,14 +49,15 @@ var responseMandatoryHeaders = []string{
 // usage. In addition to the notes on the fields below, see the
 // documentation for Request.Write and RoundTripper.
 type Message struct {
+	RemoteAddr string
+
 	// Sepcified for SIP Request
-	Request bool
-	Method  string
-	URL     *url.URL
+	Request    bool
+	Method     string
+	RequestURI *URI
 
 	// Sepcified for SIP Response
-	Response bool
-	// Status       string // e.g. "200 OK"
+	Response     bool
 	StatusCode   int // e.g. 200
 	ReasonPhrase string
 
@@ -66,18 +65,20 @@ type Message struct {
 	ProtoMajor int    // 2
 	ProtoMinor int    // 0
 
-	Header http.Header
+	To          *To
+	From        *From
+	Via         *ViaHeaders
+	MaxForwards *MaxForwards
+	CSeq        *CSeq
+	CallID      *CallID
+	Contact     *ContactHeaders
+	Header      http.Header
 
-	Body          io.ReadCloser
-	GetBody       func() (io.ReadCloser, error)
+	Body          []byte
 	ContentLength int64
 	Close         bool
 	Trailer       http.Header
-	RemoteAddr    string
-	RequestURI    string
 	Cancel        <-chan struct{}
-
-	ForRequest *Message
 
 	ctx context.Context
 }
@@ -119,7 +120,7 @@ func (r *Message) WithContext(ctx context.Context) *Message {
 	*r2 = *r
 	r2.ctx = ctx
 
-	r2.URL = cloneURL(r.URL) // legacy behavior; TODO: try to remove. Issue 23544
+	// r2.URL = cloneURL(r.URL) // legacy behavior; TODO: try to remove. Issue 23544
 	return r2
 }
 
@@ -136,7 +137,7 @@ func (r *Message) Clone(ctx context.Context) *Message {
 	r2 := new(Message)
 	*r2 = *r
 	r2.ctx = ctx
-	r2.URL = cloneURL(r.URL)
+	// r2.URL = cloneURL(r.URL)
 	if r.Header != nil {
 		r2.Header = r.Header.Clone()
 	}
@@ -191,6 +192,70 @@ func (r *Message) Write(w io.Writer) error {
 	return r.write(w)
 }
 
+func writeHeader(w io.Writer, r *Message) {
+	ignores := make(map[string]bool)
+	if r.To != nil {
+		ignores["to"] = true
+		fmt.Fprintf(w, "To: %s\r\n", r.To)
+	}
+	if r.From != nil {
+		ignores["from"] = true
+		fmt.Fprintf(w, "From: %s\r\n", r.From)
+	}
+	if r.Via != nil {
+		ignores["via"] = true
+		// Write order controlled by ViaHeaders Structure
+		// Because it is stored as reverse order by ViaHeaders
+		fmt.Fprintf(w, "%s", r.Via.WriteHeader())
+	}
+	if r.MaxForwards != nil {
+		ignores["max-forwards"] = true
+		fmt.Fprintf(w, "Max-Forwards: %s\r\n", r.MaxForwards)
+	}
+	if r.CallID != nil {
+		ignores["call-id"] = true
+		fmt.Fprintf(w, "Call-ID: %s\r\n", r.CallID)
+	}
+	if r.CSeq != nil {
+		ignores["cseq"] = true
+		fmt.Fprintf(w, "CSeq: %s\r\n", r.CSeq)
+	}
+	if r.Contact != nil {
+		ignores["contact"] = true
+		fmt.Fprintf(w, "%s", r.Contact.WriteHeader())
+	}
+
+	keys := make([]string, len(r.Header))
+	orig := make(map[string]string)
+	idx := 0
+	for key, _ := range r.Header {
+		keys[idx] = strings.ToLower(key)
+		orig[strings.ToLower(key)] = key
+		idx++
+	}
+
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, ok := ignores[key]; ok {
+			continue
+		}
+		header := r.Header.Values(key)
+		key = orig[key]
+		for _, value := range header {
+			switch key {
+			case "Cseq":
+				key = "CSeq"
+				break
+			case "Call-Id":
+				key = "Call-ID"
+				break
+			}
+			fmt.Fprintf(w, "%v: %v\r\n", key, value)
+		}
+
+	}
+}
+
 func (r *Message) writeResponse(w io.Writer) (err error) {
 	text := r.ReasonPhrase
 	if text == "" {
@@ -205,66 +270,24 @@ func (r *Message) writeResponse(w io.Writer) (err error) {
 		return err
 	}
 
-	keys := make([]string, len(r.Header))
-	idx := 0
-	for key, _ := range r.Header {
-		keys[idx] = key
-		idx++
-	}
-	sort.Strings(keys)
+	writeHeader(w, r)
 
-	//for key, header := range r.Header {
-	for _, key := range keys {
-		header := r.Header[key]
-		for _, value := range header {
-			switch key {
-			case "Cseq":
-				key = "CSeq"
-				break
-			case "Call-Id":
-				key = "Call-ID"
-				break
-			}
-			fmt.Fprintf(w, "%v: %v\r\n", key, value)
-		}
-
-	}
 	fmt.Fprintf(w, "\r\n")
+
 	// TODO: Write Body
 	return nil
 }
 
 func (r *Message) writeRequest(w io.Writer) (err error) {
 	if _, err := fmt.Fprintf(w, "%s %s SIP/%d.%d\r\n",
-		r.Method, r.RequestURI, r.ProtoMajor, r.ProtoMinor); err != nil {
+		r.Method, r.RequestURI.String(), r.ProtoMajor, r.ProtoMinor); err != nil {
 		return err
 	}
 
-	keys := make([]string, len(r.Header))
-	idx := 0
-	for key, _ := range r.Header {
-		keys[idx] = key
-		idx++
-	}
-	sort.Strings(keys)
+	writeHeader(w, r)
 
-	//for key, header := range r.Header {
-	for _, key := range keys {
-		header := r.Header[key]
-		for _, value := range header {
-			switch key {
-			case "Cseq":
-				key = "CSeq"
-				break
-			case "Call-Id":
-				key = "Call-ID"
-				break
-			}
-			fmt.Fprintf(w, "%v: %v\r\n", key, value)
-		}
-
-	}
 	fmt.Fprintf(w, "\r\n")
+
 	// TODO: Write Body
 	return nil
 }
@@ -333,7 +356,7 @@ func validMethod(method string) bool {
 }
 
 // NewRequest wraps NewRequestWithContext using the background context.
-func NewRequest(method, url string, body io.Reader) (*Message, error) {
+func NewRequest(method, url string, body []byte) (*Message, error) {
 	return NewRequestWithContext(context.Background(), method, url, body)
 }
 
@@ -359,7 +382,7 @@ func NewRequest(method, url string, body io.Reader) (*Message, error) {
 // exact value (instead of -1), GetBody is populated (so 307 and 308
 // redirects can replay the body), and Body is set to NoBody if the
 // ContentLength is 0.
-func NewRequestWithContext(ctx context.Context, method, url string, body io.Reader) (*Message, error) {
+func NewRequestWithContext(ctx context.Context, method, url string, body []byte) (*Message, error) {
 	if method == "" {
 		// We document that "" means "INVITE" for Request.Method, and people have
 		// relied on that from NewRequest, so keep that working.
@@ -372,67 +395,20 @@ func NewRequestWithContext(ctx context.Context, method, url string, body io.Read
 	if ctx == nil {
 		return nil, errors.New("jtsip: nil Context")
 	}
-	u, err := urlpkg.Parse(url)
+	u, err := Parse(url)
 	if err != nil {
 		return nil, err
-	}
-	rc, ok := body.(io.ReadCloser)
-	if !ok && body != nil {
-		rc = ioutil.NopCloser(body)
 	}
 	// The host's colon:port should be normalized. See Issue 14836.
 	msg := &Message{
 		ctx:        ctx,
 		Method:     method,
-		URL:        u,
+		RequestURI: u,
 		Proto:      "SIP/2.0",
 		ProtoMajor: 2,
 		ProtoMinor: 0,
 		Header:     make(http.Header),
-		Body:       rc,
-	}
-	if body != nil {
-		switch v := body.(type) {
-		case *bytes.Buffer:
-			msg.ContentLength = int64(v.Len())
-			buf := v.Bytes()
-			msg.GetBody = func() (io.ReadCloser, error) {
-				r := bytes.NewReader(buf)
-				return ioutil.NopCloser(r), nil
-			}
-		case *bytes.Reader:
-			msg.ContentLength = int64(v.Len())
-			snapshot := *v
-			msg.GetBody = func() (io.ReadCloser, error) {
-				r := snapshot
-				return ioutil.NopCloser(&r), nil
-			}
-		case *strings.Reader:
-			msg.ContentLength = int64(v.Len())
-			snapshot := *v
-			msg.GetBody = func() (io.ReadCloser, error) {
-				r := snapshot
-				return ioutil.NopCloser(&r), nil
-			}
-		default:
-			// This is where we'd set it to -1 (at least
-			// if body != NoBody) to mean unknown, but
-			// that broke people during the Go 1.8 testing
-			// period. People depend on it being 0 I
-			// guess. Maybe retry later. See Issue 18117.
-		}
-		// For client requests, Request.ContentLength of 0
-		// means either actually 0, or unknown. The only way
-		// to explicitly say that the ContentLength is zero is
-		// to set the Body to nil. But turns out too much code
-		// depends on NewRequest returning a non-nil Body,
-		// so we use a well-known ReadCloser variable instead
-		// and have the http package also treat that sentinel
-		// variable to mean explicitly zero.
-		if msg.GetBody != nil && msg.ContentLength == 0 {
-			msg.Body = NoBody
-			msg.GetBody = func() (io.ReadCloser, error) { return NoBody, nil }
-		}
+		Body:       body,
 	}
 
 	return msg, nil
@@ -550,15 +526,19 @@ func readMessage(msg *Message, b *bufio.Reader) (err error) {
 	if msg.ProtoMajor, msg.ProtoMinor, ok = ParseSIPVersion(firstLine3); ok {
 		// this message will be Request Message
 		msg.Method = firstLine1
-		msg.RequestURI = firstLine2
+		uri, err := Parse(firstLine2)
+		if err != nil {
+			return ErrMalformedMessage
+		}
+		msg.RequestURI = uri //firstLine2
 		msg.Proto = firstLine3
 		if !validMethod(msg.Method) {
 			return badStringError("invalid method", msg.Method)
 		}
-		rawurl := msg.RequestURI
-		if msg.URL, err = url.ParseRequestURI(rawurl); err != nil {
-			return err
-		}
+		// rawurl := msg.RequestURI
+		// if msg.URL, err = url.ParseRequestURI(rawurl); err != nil {
+		// 	return err
+		// }
 		msg.Request = true
 	} else {
 		// this message will be Response Message
@@ -586,6 +566,18 @@ func readMessage(msg *Message, b *bufio.Reader) (err error) {
 	}
 	msg.Header = http.Header(mimeHeader)
 
+	if contacts := msg.Header.Values("Contact"); len(contacts) > 0 {
+		msg.Contact = NewContactHeaders()
+		for _, c := range contacts {
+			ParseContacts(c, msg.Contact)
+		}
+	}
+	len, err := b.Read(msg.Body)
+	if err != nil {
+		return err
+	}
+	msg.ContentLength = int64(len)
+
 	return nil
 }
 
@@ -603,7 +595,7 @@ func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
 	resp.ProtoMajor = 2
 	resp.ProtoMinor = 0
 
-	for _, key := range responseMandatoryHeaders {
+	for _, key := range mandatoryHeaders {
 		//for key, headers := range msg.Header {
 		for _, header := range msg.Header.Values(key) {
 			resp.Header.Add(key, header)
@@ -709,16 +701,10 @@ func (r *Message) expectsContinue() bool {
 	return hasToken(r.Header.Get("Expect"), "100-continue")
 }
 
-func (r *Message) closeBody() {
-	if r.Body != nil {
-		r.Body.Close()
-	}
-}
-
 // outgoingLength reports the Content-Length of this outgoing (Client) request.
 // It maps 0 into -1 (unknown) when the Body is non-nil.
 func (r *Message) outgoingLength() int64 {
-	if r.Body == nil || r.Body == NoBody {
+	if r.Body == nil {
 		return 0
 	}
 	if r.ContentLength != 0 {
@@ -758,7 +744,7 @@ func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message
 		copyFromRequestHeaders := []string{
 			"Call-ID",
 			"From",
-			"Max-Forward",
+			"Max-Forwards",
 		}
 		copyFromRequestHeadersIfPresent := []string{
 			"Route",
@@ -780,7 +766,10 @@ func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message
 		}
 	} else {
 		// TODO: No RFC comply implemantation
-		ack.RequestURI = res.Header.Get("Contact")
+		// uri, err := Parse(res.Header.Get("Contact"))
+		// uri := res.Contact.Header[0].Addr.Uri
+		ack.RequestURI = req.RequestURI
+		// ack.RequestURI = uri
 		topmostvia := req.Header.Get("Via")
 		if topmostvia == "" {
 			return nil, ErrHeaderParseError
@@ -791,7 +780,7 @@ func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message
 		copyFromRequestHeaders := []string{
 			"Call-ID",
 			"From",
-			"Max-Forward",
+			"Max-Forwards",
 		}
 		copyFromRequestHeadersIfPresent := []string{
 			"Route",
@@ -846,7 +835,11 @@ func CreateRequest(addr string) (msg *Message) {
 func CreateINVITE(addr, ruri string) (msg *Message) {
 	msg = CreateRequest(addr)
 	msg.Method = "INVITE"
-	msg.RequestURI = ruri
+	uri, err := Parse(ruri)
+	if err != nil {
+		return nil
+	}
+	msg.RequestURI = uri
 	return msg
 }
 

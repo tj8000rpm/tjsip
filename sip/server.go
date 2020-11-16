@@ -519,9 +519,13 @@ func (srv *Server) CreateIniINVITE(addr, ruri, contact string) (msg *Message) {
 	_ = aorDomain
 	srv.Conn.RemoteAddr()
 	msg.Header.Add("To", ruri)
-	msg.Header.Add("Max-Forward", fmt.Sprintf("%d", InitMaxForward))
+	msg.Header.Add("Max-Forwards", fmt.Sprintf("%d", InitMaxForward))
 	msg.Header.Add("CSeq", fmt.Sprintf("%d INVITE", initCSeq))
-	msg.Header.Add("Call-ID", GenerateCallID(localAddr))
+	callId, err := GenerateCallID()
+	if err != nil {
+		return nil
+	}
+	msg.Header.Add("Call-ID", callId+"@"+localAddr)
 	via := fmt.Sprintf("SIP/2.0/UDP 127.0.0.1:5060;branch=%s", GenerateBranchParam())
 	msg.Header.Add("Via", via)
 	return msg

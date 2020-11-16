@@ -61,28 +61,6 @@
         crlf="true">
   </recv>
 
-  <pause milliseconds="4000"/>
-
-  <send>
-    <![CDATA[
-
-      SIP/2.0 300 Multiple Choices
-      [last_Via:]
-      [last_From:]
-      [last_To:];tag=[pid]SIPpTag01[call_number]
-      [last_Call-ID:]
-      CSeq: 1 INVITE
-      Contact: <sip:110@pi-popi-po.com>
-      Content-Type: application/sdp
-      Content-Length: [len]
-
-    ]]>
-  </send>
-
-  <recv request="ACK"
-        rtd="true"
-        crlf="true">
-  </recv>
 
 
   <!-- Keep the call open for a while in case the 200 is lost to be     -->

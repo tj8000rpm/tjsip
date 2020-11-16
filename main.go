@@ -1,9 +1,7 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"sip/sip"
 	"sync"
@@ -94,18 +92,12 @@ func clientMain(srv *sip.Server) {
 	time.Sleep(time.Second * 1)
 	for {
 		log.Printf("client main")
-		msg := sip.CreateMessage("127.0.0.1:5062")
-		msg.Request = true
-		msg.Method = "INVITE"
-		msg.RequestURI = "sip:110@127.0.0.1:5062"
-		msg.Header = make(http.Header)
-		msg.Header.Add("Call-ID", "aaaaaaaa@127.0.0.1:5060")
+		msg := srv.CreateIniINVITE(
+			"127.0.0.1:5062",
+			"sip:term@127.0.0.1:5062",
+			"sip:orig@127.0.0.1:5060",
+		)
 		msg.Header.Add("From", "Hoge@127.0.0.1:5060")
-		msg.Header.Add("To", "hige@127.0.0.1:5062")
-		msg.Header.Add("Max-Forward", "70")
-		msg.Header.Add("CSeq", "1 INVITE")
-		via := fmt.Sprintf("SIP/2.0/UDP 127.0.0.1:5060;branch=%s", sip.GenerateBranchParam())
-		msg.Header.Add("Via", via)
 		msg.AddFromTag()
 
 		log.Printf("%v", msg)
@@ -130,6 +122,9 @@ func clientMain(srv *sip.Server) {
 	loop:
 		for {
 			select {
+			case <-newTransaction.TuChan:
+				log.Printf("Transaction closed and exit loop")
+				break loop
 			case resp := <-respChan:
 				log.Printf("response is Recive")
 				log.Printf("%v vs %v", resp.StatusCode, sip.StatusOk)
@@ -147,6 +142,7 @@ func clientMain(srv *sip.Server) {
 				}
 			}
 		}
+		log.Printf("Loop exited")
 		time.Sleep(time.Second * 30)
 		return
 	}
@@ -173,7 +169,8 @@ func main() {
 	}()
 
 	sip.HandleFunc(sip.LayerCore, "odd test", mySipCoreHandler)
-	server := &sip.Server{Addr: ""}
+	// server := &sip.Server{Addr: "127.0.0.1:5060"}
+	server := &sip.Server{Addr: "localhost:5060"}
 	go clientMain(server)
 	server.ListenAndServe()
 }

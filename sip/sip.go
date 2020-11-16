@@ -75,6 +75,7 @@ var (
 
 var (
 	InitMaxForward = 70
+	UseCompactForm = false
 )
 
 var LogLevel = LogWarn

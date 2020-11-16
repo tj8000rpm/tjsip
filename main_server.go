@@ -164,7 +164,7 @@ func main() {
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
 	sip.LogLevel = sip.LogDebug
-	sip.LogLevel = sip.LogInfo
+	//sip.LogLevel = sip.LogInfo
 	go func() {
 		for {
 			time.Sleep(time.Second * 5)
