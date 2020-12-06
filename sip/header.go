@@ -62,6 +62,15 @@ type NameAddr struct {
 	Uri         *URI
 }
 
+func (addr *NameAddr) Clone() (cp *NameAddr) {
+	cp = new(NameAddr)
+	cp.DisplayName = addr.DisplayName
+	if addr.Uri != nil {
+		cp.Uri = addr.Uri.Clone()
+	}
+	return cp
+}
+
 func (addr *NameAddr) String() string {
 	noDisplayName := addr.DisplayName == ""
 	noUriParameters := addr.Uri.RawParameter == ""
@@ -154,6 +163,15 @@ type To struct {
 }
 type From = To
 
+func (t *To) Clone() (cp *To) {
+	cp = new(To)
+	if t.Addr != nil {
+		cp.Addr = t.Addr.Clone()
+	}
+	cp.RawParameter = t.RawParameter
+	return cp
+}
+
 func (t *To) String() string {
 	if t.RawParameter == "" {
 		return t.Addr.String()
@@ -190,6 +208,16 @@ func NewFromHeaderFromString(display, uri, rawParam string) *From {
 	return NewToHeaderFromString(display, uri, rawParam)
 }
 
+func ParseFrom(s string) *From {
+	nameAddr, rawParam := ParseNameAddr(s)
+	rawParam = strings.Trim(rawParam, " ;")
+	return NewToHeader(nameAddr, rawParam)
+}
+
+func ParseTo(s string) *To {
+	return ParseFrom(s)
+}
+
 /********************************
 * Via Header
 ********************************/
@@ -197,6 +225,14 @@ type Via struct {
 	SentProtocol string
 	SentBy       string
 	RawParameter string
+}
+
+func (v *Via) Clone() (cp *Via) {
+	cp = new(Via)
+	cp.SentProtocol = v.SentProtocol
+	cp.SentBy = v.SentBy
+	cp.RawParameter = v.RawParameter
+	return cp
 }
 
 func (via *Via) Parameter() url.Values {
@@ -251,13 +287,81 @@ func NewViaHeaderTCP(by, param string) *Via {
 	return NewViaHeader("SIP/2.0/TCP", by, param)
 }
 
+func ParseVias(s string, v *ViaHeaders) error {
+	if v == nil {
+		return ErrHeaderParseError
+	}
+	if s == "" {
+		return nil
+	}
+	blk := " \t\r\n"
+	s = strings.Trim(s, blk)
+	sSp := strings.SplitN(s, " ", 2)
+
+	proto, s := strings.Trim(sSp[0], blk), strings.Trim(sSp[1], blk)
+	i := 0
+loop1:
+	for i = 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case ';':
+			break loop1
+		case ',':
+			break loop1
+		}
+	}
+	sentby, s := s[:i], s[i:]
+	sentby = strings.Trim(sentby, blk)
+
+	quoted := false
+loop2:
+	for i = 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '"':
+			quoted = !quoted
+		case ',':
+			if !quoted {
+				break loop2
+			}
+		}
+	}
+	rawParam := strings.Trim(s[:i], blk+";")
+	trail := strings.Trim(s[i:], blk+",")
+	via := NewViaHeader(proto, sentby, rawParam)
+	v.Append(via)
+
+	return ParseVias(trail, v)
+}
+
+func parseVias(s string) *Via {
+	return nil
+}
+
 type ViaHeaders struct {
 	Header []*Via
+}
+
+func (v *ViaHeaders) Clone() (cp *ViaHeaders) {
+	cp = new(ViaHeaders)
+	cp.Header = make([]*Via, len(v.Header))
+	for i := 0; i < len(v.Header); i++ {
+		if v.Header[i] != nil {
+			cp.Header[i] = v.Header[i].Clone()
+		}
+	}
+	return cp
 }
 
 func (v *ViaHeaders) Insert(via *Via) bool {
 	before := len(v.Header)
 	v.Header = append(v.Header, via)
+	return before < len(v.Header)
+}
+
+func (v *ViaHeaders) Append(via *Via) bool {
+	before := len(v.Header)
+	v.Header = append([]*Via{via}, v.Header...)
 	return before < len(v.Header)
 }
 
@@ -278,7 +382,7 @@ func (v *ViaHeaders) Length() int {
 }
 
 func (v *ViaHeaders) WriteHeader() string {
-	str := ""
+	var str string
 	key := "Via: "
 	if UseCompactForm {
 		key = "v: "
@@ -304,6 +408,13 @@ func NewViaHeaders() *ViaHeaders {
 type CSeq struct {
 	Sequence int64
 	Method   string
+}
+
+func (c *CSeq) Clone() (cp *CSeq) {
+	cp = new(CSeq)
+	cp.Sequence = c.Sequence
+	cp.Method = c.Method
+	return cp
 }
 
 func (c *CSeq) Init() bool {
@@ -344,12 +455,37 @@ func NewCSeqHeader(method string) *CSeq {
 	return c
 }
 
+func ParseCSeq(s string) *CSeq {
+	blk := " \t\r\n"
+	s = strings.Trim(s, blk)
+	temp := strings.SplitN(s, " ", 2)
+	front, method := temp[0], strings.Trim(temp[1], blk)
+	seq, err := strconv.ParseInt(front, 10, 64)
+	if err != nil {
+		return nil
+	}
+	c := new(CSeq)
+	if c == nil {
+		return nil
+	}
+	c.Method = method
+	c.Sequence = seq
+	return c
+}
+
 /********************************
 * CallID Header
 ********************************/
 type CallID struct {
 	Identifier string
 	Host       string
+}
+
+func (c *CallID) Clone() (cp *CallID) {
+	cp = new(CallID)
+	cp.Identifier = c.Identifier
+	cp.Host = c.Host
+	return cp
 }
 
 func (c *CallID) Init() bool {
@@ -388,11 +524,34 @@ func NewCallIDHeaderWithAddr(localAddr string) *CallID {
 	return c
 }
 
+func ParseCallID(s string) *CallID {
+	blk := " \t\r\n"
+	temp := strings.SplitN(s, "@", 2)
+	var identifier, host string
+	identifier = temp[0]
+	if len(temp) == 2 {
+		host = temp[1]
+	}
+	c := new(CallID)
+	if c == nil {
+		return nil
+	}
+	c.Identifier = strings.Trim(identifier, blk)
+	c.Host = strings.Trim(host, blk)
+	return c
+}
+
 /********************************
 * MaxForwards Header
 ********************************/
 type MaxForwards struct {
 	Remains int
+}
+
+func (m *MaxForwards) Clone() (cp *MaxForwards) {
+	cp = new(MaxForwards)
+	cp.Remains = m.Remains
+	return cp
 }
 
 func (m *MaxForwards) Decrement() bool {
@@ -417,6 +576,19 @@ func NewMaxForwardsHeader() *MaxForwards {
 	return m
 }
 
+func ParseMaxForwards(s string) *MaxForwards {
+	remain, err := strconv.Atoi(s)
+	if err != nil {
+		return nil
+	}
+	m := new(MaxForwards)
+	if m == nil {
+		return nil
+	}
+	m.Remains = remain
+	return m
+}
+
 /********************************
 * Contact Header
 ********************************/
@@ -424,6 +596,16 @@ type Contact struct {
 	Star         bool
 	Addr         *NameAddr
 	RawParameter string
+}
+
+func (c *Contact) Clone() (cp *Contact) {
+	cp = new(Contact)
+	cp.Star = c.Star
+	if c.Addr != nil {
+		cp.Addr = c.Addr.Clone()
+	}
+	cp.RawParameter = c.RawParameter
+	return cp
 }
 
 func (c *Contact) String() string {
@@ -508,6 +690,17 @@ type ContactHeaders struct {
 	Header []*Contact
 }
 
+func (c *ContactHeaders) Clone() (cp *ContactHeaders) {
+	cp = new(ContactHeaders)
+	cp.Header = make([]*Contact, len(c.Header))
+	for i := 0; i < len(c.Header); i++ {
+		if c.Header[i] != nil {
+			cp.Header[i] = c.Header[i].Clone()
+		}
+	}
+	return cp
+}
+
 func NewContactHeaders() *ContactHeaders {
 	c := new(ContactHeaders)
 	if c == nil {
@@ -533,4 +726,11 @@ func (c *ContactHeaders) WriteHeader() string {
 		str += key + c.Header[i].String() + "\r\n"
 	}
 	return str
+}
+
+func (c *ContactHeaders) Length() int {
+	if c.Header == nil {
+		return 0
+	}
+	return len(c.Header)
 }

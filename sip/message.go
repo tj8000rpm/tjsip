@@ -77,10 +77,50 @@ type Message struct {
 	Body          []byte
 	ContentLength int64
 	Close         bool
-	Trailer       http.Header
 	Cancel        <-chan struct{}
 
 	ctx context.Context
+}
+
+func (msg *Message) Clone() (cpMsg *Message) {
+	cpMsg = CreateMessage("")
+	if cpMsg == nil {
+		return nil
+	}
+	cpMsg.Response = msg.Response
+	cpMsg.StatusCode = msg.StatusCode
+	cpMsg.ReasonPhrase = msg.ReasonPhrase
+
+	cpMsg.Request = msg.Request
+	cpMsg.Method = msg.Method
+	cpMsg.RequestURI = msg.RequestURI.Clone()
+
+	cpMsg.StatusCode = msg.StatusCode
+
+	cpMsg.Proto = msg.Proto
+	cpMsg.ProtoMajor = msg.ProtoMajor
+	cpMsg.ProtoMinor = msg.ProtoMinor
+
+	cpMsg.To = msg.To.Clone()
+	cpMsg.From = msg.From.Clone()
+	cpMsg.Via = msg.Via.Clone()
+	cpMsg.CallID = msg.CallID.Clone()
+	cpMsg.CSeq = msg.CSeq.Clone()
+	cpMsg.MaxForwards = msg.MaxForwards.Clone()
+	cpMsg.Contact = msg.Contact.Clone()
+
+	cpMsg.Header = msg.Header.Clone()
+
+	cpMsg.Body = make([]byte, len(msg.Body))
+	copy(cpMsg.Body, msg.Body)
+
+	cpMsg.ContentLength = msg.ContentLength
+	cpMsg.Close = msg.Close
+
+	cpMsg.Cancel = make(<-chan struct{})
+	cpMsg.ctx = msg.ctx
+
+	return cpMsg
 }
 
 // Context returns the request's context. To change the context, use
@@ -121,29 +161,6 @@ func (r *Message) WithContext(ctx context.Context) *Message {
 	r2.ctx = ctx
 
 	// r2.URL = cloneURL(r.URL) // legacy behavior; TODO: try to remove. Issue 23544
-	return r2
-}
-
-// Clone returns a deep copy of r with its context changed to ctx.
-// The provided ctx must be non-nil.
-//
-// For an outgoing client request, the context controls the entire
-// lifetime of a request and its response: obtaining a connection,
-// sending the request, and reading the response headers and body.
-func (r *Message) Clone(ctx context.Context) *Message {
-	if ctx == nil {
-		panic("nil context")
-	}
-	r2 := new(Message)
-	*r2 = *r
-	r2.ctx = ctx
-	// r2.URL = cloneURL(r.URL)
-	if r.Header != nil {
-		r2.Header = r.Header.Clone()
-	}
-	if r.Trailer != nil {
-		r2.Trailer = r.Trailer.Clone()
-	}
 	return r2
 }
 
@@ -566,12 +583,8 @@ func readMessage(msg *Message, b *bufio.Reader) (err error) {
 	}
 	msg.Header = http.Header(mimeHeader)
 
-	if contacts := msg.Header.Values("Contact"); len(contacts) > 0 {
-		msg.Contact = NewContactHeaders()
-		for _, c := range contacts {
-			ParseContacts(c, msg.Contact)
-		}
-	}
+	msg.parseHeader()
+
 	len, err := b.Read(msg.Body)
 	if err != nil {
 		return err
@@ -579,6 +592,52 @@ func readMessage(msg *Message, b *bufio.Reader) (err error) {
 	msg.ContentLength = int64(len)
 
 	return nil
+}
+
+func (msg *Message) parseHeader() {
+	// To Header
+	if to := msg.Header.Get("to"); to != "" {
+		msg.To = ParseTo(to)
+	}
+	// From Header
+	if from := msg.Header.Get("from"); from != "" {
+		msg.From = ParseFrom(from)
+	}
+	// CallID Header
+	if callid := msg.Header.Get("call-id"); callid != "" {
+		msg.CallID = ParseCallID(callid)
+	}
+	// CSeq Header
+	if cseq := msg.Header.Get("cseq"); cseq != "" {
+		msg.CSeq = ParseCSeq(cseq)
+	}
+	// MaxForwards Header
+	if maxforwards := msg.Header.Get("max-forwards"); maxforwards != "" {
+		msg.MaxForwards = ParseMaxForwards(maxforwards)
+	}
+	// Via Header: It will have multiple contents
+	if vias := msg.Header.Values("via"); len(vias) > 0 {
+		msg.Via = NewViaHeaders()
+		for idx := len(vias) - 1; idx >= 0; idx-- {
+			v := vias[idx]
+			err := ParseVias(v, msg.Via)
+			if err != nil {
+				// TODO: Should I have any action?
+				continue
+			}
+		}
+	}
+	// Contact Header: It will have multiple contents
+	if contacts := msg.Header.Values("Contact"); len(contacts) > 0 {
+		msg.Contact = NewContactHeaders()
+		for _, c := range contacts {
+			err := ParseContacts(c, msg.Contact)
+			if err != nil {
+				// TODO: Should I have any action?
+				continue
+			}
+		}
+	}
 }
 
 func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
@@ -595,6 +654,12 @@ func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
 	resp.ProtoMajor = 2
 	resp.ProtoMinor = 0
 
+	resp.To = msg.To
+	resp.From = msg.From
+	resp.Via = msg.Via
+	resp.CallID = msg.CallID
+	resp.CSeq = msg.CSeq
+	resp.MaxForwards = msg.MaxForwards
 	for _, key := range mandatoryHeaders {
 		//for key, headers := range msg.Header {
 		for _, header := range msg.Header.Values(key) {
@@ -608,86 +673,46 @@ func (msg *Message) GenerateResponseFromRequest() (resp *Message) {
 	return resp
 }
 
-func (msg *Message) addTag(headerkey string) error {
-	to := msg.Header.Get(headerkey)
-	if to == "" {
-		return ErrMissingMandatoryHeader
+func (msg *Message) AddFromTag() (err error) {
+	if msg.From == nil {
+		err = ErrMissingMandatoryHeader
 	}
-	for _, content := range strings.Split(to, ";") {
-		if strings.HasPrefix(strings.Trim(content, " "), "tag=") {
-			return nil
-		}
+	if tag := msg.From.Parameter().Get("tag"); len(tag) != 0 {
+		return nil
 	}
-	generatedTag, err := GenerateRandomString(15)
-	if err != nil {
-		return err
-	}
-	msg.Header.Set(headerkey, to+";tag="+generatedTag)
-
+	newParam := "tag=" + GenerateTag() + ";" + msg.From.RawParameter
+	msg.From.RawParameter = newParam
 	return nil
 }
 
-func (msg *Message) AddFromTag() (err error) {
-	if err = msg.addTag("From"); err != nil {
-		err = msg.addTag("f")
-	}
-	return err
-}
-
 func (msg *Message) AddToTag() (err error) {
-	if err = msg.addTag("To"); err != nil {
-		err = msg.addTag("t")
+	if msg.To == nil {
+		err = ErrMissingMandatoryHeader
 	}
-	return err
+	if tag := msg.To.Parameter().Get("tag"); len(tag) != 0 {
+		return nil
+	}
+	newParam := "tag=" + GenerateTag() + ";" + msg.To.RawParameter
+	msg.To.RawParameter = newParam
+	return nil
 }
 
-func ViaParser(s string) (proto, sentBy string, via_params map[string]string, err error) {
-
-	temp_string_slice := strings.SplitN(strings.Trim(s, " "), " ", 2)
-	if len(temp_string_slice) < 2 {
-		return "", "", nil, ErrHeaderParseError
-	}
-
-	proto = temp_string_slice[0]
-
-	temp_string_slice = strings.Split(strings.Trim(temp_string_slice[1], " "), ";")
-
-	sentBy = temp_string_slice[0]
-	for _, param := range temp_string_slice[1:] {
-		if via_params == nil {
-			via_params = make(map[string]string)
-		}
-		key_val_slic := strings.SplitN(param, "=", 2)
-		key := key_val_slic[0]
-		val := key_val_slic[1]
-		via_params[key] = val
-	}
-
-	return proto, sentBy, via_params, nil
-}
-
-func (msg *Message) GetTopMostVia() (proto, sentBy string, params map[string]string, err error) {
-	topmostvia := msg.Header.Get("Via")
-	if topmostvia == "" {
+func (msg *Message) GetTopMostVia() (proto, sentBy string, params map[string][]string, err error) {
+	if msg.Via == nil {
 		return "", "", nil, ErrMissingMandatoryHeader
 	}
-	topmostvia = strings.Split(topmostvia, ",")[0]
-
-	return ViaParser(topmostvia)
+	v := msg.Via.TopMost()
+	proto = v.SentProtocol
+	sentBy = v.SentBy
+	params = v.Parameter()
+	return
 }
 
-func (msg *Message) GetCSeq() (cseqMethod string, cseqNum int, err error) {
-	cseq := msg.Header.Get("CSeq")
-	if cseq == "" {
+func (msg *Message) GetCSeq() (cseqMethod string, cseqNum int64, err error) {
+	if msg.CSeq == nil {
 		return "", 0, ErrMissingMandatoryHeader
 	}
-	cseqItem := strings.SplitN(cseq, " ", 2)
-	cseqNum, err = strconv.Atoi(cseqItem[0])
-	if err != nil {
-		return "", 0, ErrHeaderParseError
-	}
-	cseqMethod = cseqItem[1]
-	return cseqMethod, cseqNum, nil
+	return msg.CSeq.Method, msg.CSeq.Sequence, nil
 }
 
 func copyValues(dst, src url.Values) {
@@ -722,47 +747,50 @@ func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message
 		return nil, ErrMalformedMessage
 	}
 
-	reqVia := req.Header.Values("Via")
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		ack.RequestURI = req.RequestURI
-		for idx, viaHeader := range reqVia {
+		ack.Via = NewViaHeaders()
+		var via *Via
+		for idx, v := range req.Via.Header {
 			if idx == 0 {
-				proto, sentBy, params, err := ViaParser(viaHeader)
-				if err != nil {
-					return nil, err
+				proto := v.SentProtocol
+				setnBy := v.SentBy
+				params := v.Parameter()
+				if len(params["branch"]) == 0 {
+					return nil, ErrMalformedMessage
 				}
-				params["branch"] = GenerateBranchParam()
-				newVia := fmt.Sprintf("%s %s", proto, sentBy)
-				for key, val := range params {
-					newVia += fmt.Sprintf(";%s=%s", key, val)
-				}
-				ack.Header.Add("Via", newVia)
-			}
-			ack.Header.Add("Via", viaHeader)
 
-		}
-		copyFromRequestHeaders := []string{
-			"Call-ID",
-			"From",
-			"Max-Forwards",
+				params["branch"][0] = GenerateBranchParam()
+
+				rawParam := ""
+				for key, values := range params {
+					for _, value := range values {
+						rawParam += key
+						rawParam += "="
+						rawParam += value
+					}
+					rawParam += ";"
+				}
+				via = NewViaHeader(proto, setnBy, rawParam)
+			} else {
+				via = v
+			}
+			ack.Via.Append(via)
 		}
 		copyFromRequestHeadersIfPresent := []string{
 			"Route",
 		}
-		copyFromResponseHeaders := []string{
-			"To",
-		}
-		for _, key := range copyFromRequestHeaders {
-			ack.Header.Add(key, req.Header.Get(key))
-		}
+
+		ack.From = req.From
+		ack.CallID = req.CallID
+		ack.MaxForwards = req.MaxForwards
+		ack.To = res.To
+
 		for _, key := range copyFromRequestHeadersIfPresent {
 			value := req.Header.Get(key)
 			if value != "" {
 				ack.Header.Add(key, value)
 			}
-		}
-		for _, key := range copyFromResponseHeaders {
-			ack.Header.Add(key, res.Header.Get(key))
 		}
 	} else {
 		// TODO: No RFC comply implemantation
@@ -770,36 +798,26 @@ func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message
 		// uri := res.Contact.Header[0].Addr.Uri
 		ack.RequestURI = req.RequestURI
 		// ack.RequestURI = uri
-		topmostvia := req.Header.Get("Via")
-		if topmostvia == "" {
+		v := req.Via.TopMost()
+		if v == nil {
 			return nil, ErrHeaderParseError
 		}
-		topmostvia = strings.Split(topmostvia, ",")[0]
-		ack.Header.Add("Via", topmostvia)
+		ack.Via = NewViaHeaders()
+		ack.Via.Insert(v)
 
-		copyFromRequestHeaders := []string{
-			"Call-ID",
-			"From",
-			"Max-Forwards",
-		}
 		copyFromRequestHeadersIfPresent := []string{
 			"Route",
 		}
-		copyFromResponseHeaders := []string{
-			"To",
-		}
 
-		for _, key := range copyFromRequestHeaders {
-			ack.Header.Add(key, req.Header.Get(key))
-		}
+		ack.From = req.From
+		ack.CallID = req.CallID
+		ack.MaxForwards = req.MaxForwards
+		ack.To = res.To
 		for _, key := range copyFromRequestHeadersIfPresent {
 			value := req.Header.Get(key)
 			if value != "" {
 				ack.Header.Add(key, value)
 			}
-		}
-		for _, key := range copyFromResponseHeaders {
-			ack.Header.Add(key, res.Header.Get(key))
 		}
 	}
 	_, cseqNum, err := req.GetCSeq()
@@ -815,9 +833,10 @@ func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message
 
 func CreateMessage(addr string) (msg *Message) {
 	msg = new(Message)
-	if msg != nil {
-		msg.RemoteAddr = addr
+	if msg == nil {
+		return nil
 	}
+	msg.RemoteAddr = addr
 	msg.Proto = "SIP/2.0"
 	msg.ProtoMajor = 2
 	msg.ProtoMinor = 0
@@ -829,6 +848,8 @@ func CreateMessage(addr string) (msg *Message) {
 func CreateRequest(addr string) (msg *Message) {
 	msg = CreateMessage(addr)
 	msg.Request = true
+	msg.MaxForwards = NewMaxForwardsHeader()
+	msg.CallID = NewCallIDHeader()
 	return msg
 }
 
@@ -846,5 +867,16 @@ func CreateINVITE(addr, ruri string) (msg *Message) {
 func CreateACK(addr string) (msg *Message) {
 	msg = CreateRequest(addr)
 	msg.Method = "ACK"
+	return msg
+}
+
+func CreateBYE(addr, ruri string) (msg *Message) {
+	msg = CreateRequest(addr)
+	msg.Method = "BYE"
+	uri, err := Parse(ruri)
+	if err != nil {
+		return nil
+	}
+	msg.RequestURI = uri
 	return msg
 }

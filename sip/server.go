@@ -129,8 +129,6 @@ type Server struct {
 
 	serverTransactions ServerTransactions
 	clientTransactions ClientTransactions
-	//ServerTransactions map[serverTransactionKey]*ServerTransaction
-	//ClientTransactions map[clientTransactionKey]*ClientTransaction
 
 	sentQueue chan *Message
 }
@@ -216,8 +214,37 @@ func (srv *Server) handleToCore(msg *Message) error {
 	return srv.handle(LayerCore, msg)
 }
 
+func (srv *Server) HandleInTransaction(msg *Message) error {
+	return srv.handleInTransaction(msg)
+}
+
+func (srv *Server) handleInTransaction(msg *Message) error {
+	return srv.handle(LayerTransaction, msg)
+}
+
 func (*Server) newBufioReader(r io.Reader) *bufio.Reader {
 	return bufio.NewReader(r)
+}
+
+func (srv *Server) Address() string {
+	localAddr := srv.Conn.LocalAddr().String()
+	if srv.Host != "" {
+		localAddr = srv.Host
+	}
+	return localAddr
+}
+
+func (srv *Server) AorDomain() string {
+	localAddr := srv.Conn.LocalAddr().String()
+
+	if srv.AoR != "" {
+		parsedAor, err := url.Parse(srv.AoR)
+		if err != nil {
+			return localAddr
+		}
+		localAddr = parsedAor.Host
+	}
+	return localAddr
 }
 
 func (srv *Server) packetProcessing(ctx context.Context, buf []byte, size int, addr *net.UDPAddr) {
@@ -394,6 +421,30 @@ func (s *Server) closeDoneChanLocked() {
 
 func (srv *Server) WriteMessage(sentMsg *Message) error {
 	srv.Debugf("Sent message to queue")
+	localAddr := srv.Address()
+
+	if sentMsg.Request {
+		if sentMsg.Via == nil {
+			sentMsg.Via = NewViaHeaders()
+			if sentMsg.Via == nil {
+				return ErrHeaderParseError
+			}
+		}
+		if sentMsg.Via.TopMost().SentBy != localAddr {
+			v := NewViaHeaderUDP(localAddr, "branch="+GenerateBranchParam())
+			sentMsg.Via.Insert(v)
+		}
+		if sentMsg.Contact == nil {
+			sentMsg.Contact = NewContactHeaders()
+			if sentMsg.Contact == nil {
+				return ErrHeaderParseError
+			}
+		}
+		if sentMsg.Contact.Length() == 0 {
+			c := NewContactHeaderFromString("", "sip:"+localAddr, "")
+			sentMsg.Contact.Add(c)
+		}
+	}
 
 	// For SIP Message manipulation etc...
 	if err := srv.egress(sentMsg); err != nil {
@@ -495,39 +546,18 @@ func (s *Server) shuttingDown() bool {
 }
 
 /* Server Message Helper */
-
-func (srv *Server) CreateIniINVITE(addr, ruri, contact string) (msg *Message) {
-	initCSeq, err := GenerateInitCSeq()
-	if err != nil {
-		return nil
-	}
+func (srv *Server) CreateIniINVITE(addr, ruri string) (msg *Message) {
 	msg = CreateINVITE(addr, ruri)
-	localAddr := srv.Conn.LocalAddr().String()
-	physHost := localAddr
-	aorDomain := localAddr
-	if srv.Host != "" {
-		localAddr = srv.Host
-	}
-	if srv.AoR != "" {
-		parsedAor, err := url.Parse(srv.AoR)
-		if err != nil {
-			return nil
-		}
-		aorDomain = parsedAor.Host
-	}
-	_ = physHost
-	_ = aorDomain
-	srv.Conn.RemoteAddr()
-	msg.Header.Add("To", ruri)
-	msg.Header.Add("Max-Forwards", fmt.Sprintf("%d", InitMaxForward))
-	msg.Header.Add("CSeq", fmt.Sprintf("%d INVITE", initCSeq))
-	callId, err := GenerateCallID()
-	if err != nil {
-		return nil
-	}
-	msg.Header.Add("Call-ID", callId+"@"+localAddr)
-	via := fmt.Sprintf("SIP/2.0/UDP 127.0.0.1:5060;branch=%s", GenerateBranchParam())
-	msg.Header.Add("Via", via)
+
+	localAddr := srv.Address()
+	aorDomain := srv.AorDomain()
+
+	msg.To = NewToHeaderFromString("", ruri, "")
+	msg.From = NewFromHeaderFromString("", "sip:"+aorDomain, "tag="+GenerateTag())
+	msg.Contact = NewContactHeaders()
+	msg.Contact.Add(NewContactHeaderFromString("", "sip:"+localAddr, ""))
+	msg.CSeq = NewCSeqHeader("INVITE")
+
 	return msg
 }
 

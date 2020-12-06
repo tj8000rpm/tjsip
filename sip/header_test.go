@@ -477,6 +477,72 @@ func TestNewViaHeaders(t *testing.T) {
 	}
 }
 
+func TestParseVias(t *testing.T) {
+	input1 := ("SIP/2.0/UDP   10.0.0.1:5060 ;foo=bar;test=\"123,123\", " +
+		"SIP/2.0/UDP 192.168.0.1:sip;key2=value2   , " +
+		"SIP/2.0/UDP 127.0.0.1;key=value,")
+	input2 := ("SIP/2.0/UDP   172.17.0.1:5060 ;hoge=fuga")
+	v := NewViaHeaders()
+	err := ParseVias(input1, v)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+	err = ParseVias(input2, v)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+	if actual, expect := len(v.Header), 4; actual != expect {
+		t.Errorf("Not valid Via Header length: expect %v, but given '%v'", expect, actual)
+		return
+	}
+	if actual, expect := v.Header[3].SentBy, "10.0.0.1:5060"; actual != expect {
+		t.Errorf("Not valid Via Header[0] Sent By: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[3].RawParameter, "foo=bar;test=\"123,123\""; actual != expect {
+		t.Errorf("Not valid Via Header[0] Raw Parameter: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[2].SentBy, "192.168.0.1:sip"; actual != expect {
+		t.Errorf("Not valid Via Header[1] Sent By: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[2].RawParameter, "key2=value2"; actual != expect {
+		t.Errorf("Not valid Via Header[1] Raw Parameter: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[1].SentBy, "127.0.0.1"; actual != expect {
+		t.Errorf("Not valid Via Header[2] Sent By: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[1].RawParameter, "key=value"; actual != expect {
+		t.Errorf("Not valid Via Header[2] Raw Parameter: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[0].SentBy, "172.17.0.1:5060"; actual != expect {
+		t.Errorf("Not valid Via Header[3] Sent By: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[0].RawParameter, "hoge=fuga"; actual != expect {
+		t.Errorf("Not valid Via Header[3] Raw Parameter: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestParseViasMalformed(t *testing.T) {
+	input := ("SIP/2P123,123\";key2=value2, 127.0.0.1;key=value")
+	v := NewViaHeaders()
+	err := ParseVias(input, v)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+	if actual, expect := len(v.Header), 1; actual != expect {
+		t.Errorf("Not valid Via Header length: expect %v, but given '%v'", expect, actual)
+		return
+	}
+	if actual, expect := v.Header[0].SentBy, "127.0.0.1"; actual != expect {
+		t.Errorf("Not valid Via Header[0] Sent By: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[0].RawParameter, "key=value"; actual != expect {
+		t.Errorf("Not valid Via Header[0] Raw Parameter: expect %s, but given '%s'", expect, actual)
+	}
+}
+
 /**********************************
 * CSeq header
 **********************************/

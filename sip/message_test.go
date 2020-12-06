@@ -25,8 +25,7 @@ func helperWriteHeader(msg *Message) string {
 	msg.Contact.Add(NewContactHeaderStar())
 	expect := "" +
 		"To: Bob <sip:bob@biloxi.com>;tag=321321\r\n" +
-		"From: Alice <sip:alice@atlanta.com;user=phone>;tag=123123\r\n" +
-		"Via: SIP/2.0/UDP 10.0.1.1;branch=z9hG4bKaaaaaaa\r\n" +
+		"From: Alice <sip:alice@atlanta.com;user=phone>;tag=123123\r\n" + "Via: SIP/2.0/UDP 10.0.1.1;branch=z9hG4bKaaaaaaa\r\n" +
 		"Via: SIP/2.0/UDP 10.0.0.1:5060;branch=z9hG4bKnashds8\r\n" +
 		"Max-Forwards: " + strconv.Itoa(InitMaxForward) + "\r\n" +
 		"Call-ID: 123123@pc33.atlanta.com:5060\r\n" +
@@ -205,4 +204,102 @@ func TestReadMessage(t *testing.T) {
 		t.Errorf("Invald contact Parameter")
 	}
 
+}
+
+func TestMessageParseHeader(t *testing.T) {
+	msg := new(Message)
+	msg.Header = make(http.Header)
+	msg.Header.Set("to", "alice <sip:alice@atlanta.com>;tag=123123")
+	msg.Header.Set("from", "bob <sip:bob@biloxi.com>")
+	msg.Header.Set("Call-id", "aaaaa-bbbbb-cccc@pc33.atlanta.com")
+	msg.Header.Set("CSeq", "100 INVITE")
+	msg.Header.Add("Via", "SIP/2.0/UDP 192.168.0.2;branch=z9hG4bKbbbbbbb")
+	msg.Header.Add("Via", "SIP/2.0/UDP 192.168.0.1;branch=z9hG4bKaaaaaaa")
+	msg.Header.Set("Max-forwards", "70")
+	msg.Header.Set("contact", "alice <sip:alice@pc33.atlanta.com>")
+
+	msg.parseHeader()
+
+	if actual, expect := msg.To.String(), "alice <sip:alice@atlanta.com>;tag=123123"; actual != expect {
+		t.Errorf("Not valid To String(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.From.String(), "bob <sip:bob@biloxi.com>"; actual != expect {
+		t.Errorf("Not valid From String(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.CallID.String(), "aaaaa-bbbbb-cccc@pc33.atlanta.com"; actual != expect {
+		t.Errorf("Not valid CallID String(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.CSeq.String(), "100 INVITE"; actual != expect {
+		t.Errorf("Not valid CSeq String(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := len(msg.Via.Header), 2; actual != expect {
+		t.Errorf("Not valid Via length): expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := msg.Via.Header[0].String(),
+		"SIP/2.0/UDP 192.168.0.2;branch=z9hG4bKbbbbbbb"; actual != expect {
+		t.Errorf("Not valid Via[0] String(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.Via.Header[1].String(),
+		"SIP/2.0/UDP 192.168.0.1;branch=z9hG4bKaaaaaaa"; actual != expect {
+		t.Errorf("Not valid Via[1] String(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.MaxForwards.String(), "70"; actual != expect {
+		t.Errorf("Not valid MaxForwards String(): expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := len(msg.Contact.Header), 1; actual != expect {
+		t.Errorf("Not valid Contact length): expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := msg.Contact.Header[0].String(),
+		"alice <sip:alice@pc33.atlanta.com>"; actual != expect {
+		t.Errorf("Not valid Contact[0] String(): expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestMessageCopy(t *testing.T) {
+	msg := new(Message)
+	msg.Header = make(http.Header)
+	msg.Header.Add("test", "123")
+	msg.Header.Add("test", "456")
+	var err error
+	msg.RequestURI, err = Parse("sip:alice@atlanta.com:5060")
+	if err != nil {
+		t.Errorf("Unexpected status")
+	}
+	msg.To = NewToHeaderFromString("Bob", "sip:bob@biloxi.com", "tag=321321")
+	msg.From = NewFromHeaderFromString("Alice", "sip:alice@atlanta.com;user=phone", "tag=123123")
+	msg.Via = NewViaHeaders()
+	msg.Via.Insert(NewViaHeaderUDP("10.0.0.1:5060", "branch=z9hG4bKnashds8"))
+	msg.Via.Insert(NewViaHeaderUDP("10.0.1.1", "branch=z9hG4bKaaaaaaa"))
+	msg.MaxForwards = NewMaxForwardsHeader()
+	msg.CallID = NewCallIDHeaderWithAddr("pc33.atlanta.com:5060")
+	msg.CallID.Identifier = "123123"
+	msg.CSeq = NewCSeqHeader("INVITE")
+	msg.CSeq.Sequence = 123123
+	msg.Contact = NewContactHeaders()
+	msg.Contact.Add(NewContactHeaderFromString("", "sip:alice@pc33.atlanta.com:5060;user=phone", ""))
+	msg.Contact.Add(NewContactHeaderStar())
+
+	cp := msg.Clone()
+
+	if actual, expect := msg.To.String(), cp.To.String(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.From.String(), cp.From.String(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.Via.WriteHeader(), cp.Via.WriteHeader(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.CallID.String(), cp.CallID.String(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.CSeq.String(), cp.CSeq.String(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.MaxForwards.String(), cp.MaxForwards.String(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := msg.Contact.WriteHeader(), cp.Contact.WriteHeader(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
 }

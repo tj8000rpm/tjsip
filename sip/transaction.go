@@ -1,7 +1,6 @@
 package sip
 
 import (
-	//"fmt"
 	"sync"
 	"time"
 )
@@ -99,19 +98,26 @@ type ClientTransaction struct {
 	request *Message
 	ack     *Message
 	resChan chan *Message
-	toChan  chan *Message
 }
 
 func (t *ClientTransaction) Destroy() {
+	defer t.Server.DeleteClientTransaction(t)
 	t.Mu.Lock()
 	close(t.resChan)
+	t.resChan = nil
 	t.Mu.Unlock()
 	t.DestroyChanel()
-	t.Server.DeleteClientTransaction(t)
 }
 
 func (t *ClientTransaction) Handle(res *Message) {
+	t.Mu.Lock()
+	defer t.Mu.Unlock()
+	if t.resChan == nil {
+		return
+	}
 	t.resChan <- res
+	t.Server.Debugf("handle to core in transaction")
+	t.Server.HandleInTransaction(res)
 }
 
 func (t *ClientTransaction) controllerTerminated() {
@@ -119,6 +125,33 @@ func (t *ClientTransaction) controllerTerminated() {
 	t.State = TransactionStateTerminated
 	t.Server.Debugf("[%v] Transaction was closed", t.Key)
 	t.Destroy()
+}
+
+func (t *ClientTransaction) nonInviteControllerCompleted() {
+	t.Server.Debugf("State to Completed")
+	t.State = TransactionStateCompleted
+	timerKChan := make(chan bool)
+	go func() {
+		t.Server.Debugf("[%v] Timer K Start", t.Key)
+		time.Sleep(TimerK)
+		timerKChan <- true
+	}()
+	for {
+		select {
+		case <-t.DelChan:
+			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			return
+		case <-timerKChan:
+			t.Server.Debugf("[%v] Timer K(%v) fire", t.Key, TimerK)
+			t.controllerTerminated()
+			return
+		case msg := <-t.resChan:
+			if msg == nil {
+				return
+			}
+			continue
+		}
+	}
 }
 
 func (t *ClientTransaction) inviteControllerCompleted() {
@@ -151,6 +184,54 @@ func (t *ClientTransaction) inviteControllerCompleted() {
 	}
 }
 
+func (t *ClientTransaction) nonInviteControllerProceeding() {
+	t.State = TransactionStateProceeding
+
+	timerE := TimerE
+	timerF := TimerF
+	for {
+		t.Server.Debugf("Ready to response")
+		select {
+		case <-t.DelChan:
+			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			return
+		case <-time.After(timerE):
+			// retransmit request
+			t.Server.Debugf("[%v] Timer E(%v) fire", t.Key, timerE)
+			t.Server.WriteMessage(t.request)
+			timerF -= timerE
+			timerE *= 2
+			if timerE > T2 {
+				timerE = T2
+			}
+			continue
+		case <-time.After(timerF):
+			t.Server.Debugf("[%v] Timer F fire", t.Key)
+			t.controllerTerminated()
+			return
+		case msg := <-t.resChan:
+			if msg == nil {
+				return
+			}
+			t.Server.Debugf("[%v] Response from TU", t.Key)
+			if !msg.Response {
+				t.Destroy()
+				return
+			}
+
+			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
+				if msg.StatusCode >= 200 && msg.StatusCode < 700 {
+					t.nonInviteControllerCompleted()
+					return
+				} else {
+					t.nonInviteControllerProceeding()
+					return
+				}
+			}
+		}
+	}
+}
+
 func (t *ClientTransaction) inviteControllerProceeding() {
 	t.State = TransactionStateProceeding
 	for {
@@ -166,11 +247,6 @@ func (t *ClientTransaction) inviteControllerProceeding() {
 			if !msg.Response {
 				t.Destroy()
 				return
-			}
-			if msg.StatusCode >= 100 && msg.StatusCode < 700 && t.toChan != nil {
-				go func() {
-					t.toChan <- msg
-				}()
 			}
 			if msg.StatusCode >= 100 && msg.StatusCode < 200 {
 				continue
@@ -201,7 +277,7 @@ func (t *ClientTransaction) inviteController() {
 		t.Server.Debugf("[%v] Recived delete signal", t.Key)
 		return
 	case msg := <-t.TuChan:
-		if !msg.Request && msg.Method != "INVITE" {
+		if !msg.Request || msg.Method != "INVITE" {
 			t.Err = ErrTransactionUnexpectedMessage
 			t.Destroy()
 			return
@@ -245,12 +321,6 @@ func (t *ClientTransaction) inviteController() {
 			}
 
 			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
-				if t.toChan != nil {
-					go func() {
-						t.toChan <- msg
-					}()
-				}
-
 				if msg.StatusCode >= 200 && msg.StatusCode < 300 {
 					t.controllerTerminated()
 					return
@@ -271,10 +341,74 @@ func (t *ClientTransaction) inviteController() {
 			}
 		}
 	}
-
 }
 
-func (t *ClientTransaction) nonInviteController() {}
+func (t *ClientTransaction) nonInviteController() {
+	t.State = TransactionStateTrying
+	// Before State Trying
+	select {
+	case <-t.DelChan:
+		t.Server.Debugf("[%v] Recived delete signal", t.Key)
+		return
+	case msg := <-t.TuChan:
+		if !msg.Request || msg.Method == "INVITE" {
+			t.Err = ErrTransactionUnexpectedMessage
+			t.Destroy()
+			return
+		}
+		// transmit Request message
+		t.Server.Debugf("[%v] Transmit request from TU", t.Key)
+		t.Mu.Lock()
+		t.request = msg
+		t.Mu.Unlock()
+		t.Server.WriteMessage(msg)
+	}
+
+	timerE := TimerE
+	timerF := TimerF
+	// Enter Trying State
+	for {
+		t.Server.Debugf("Ready to response")
+		select {
+		case <-t.DelChan:
+			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			return
+		case <-time.After(timerE):
+			// retransmit request
+			t.Server.Debugf("[%v] Timer E(%v) fire", t.Key, timerE)
+			t.Server.WriteMessage(t.request)
+			timerF -= timerE
+			timerE *= 2
+			if timerE > T2 {
+				timerE = T2
+			}
+			continue
+		case <-time.After(timerF):
+			t.Server.Debugf("[%v] Timer F fire", t.Key)
+			t.controllerTerminated()
+			return
+		case msg := <-t.resChan:
+			if msg == nil {
+				return
+			}
+			t.Server.Debugf("[%v] Response from TU", t.Key)
+			if !msg.Response {
+				t.Destroy()
+				return
+			}
+
+			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
+				if msg.StatusCode >= 200 && msg.StatusCode < 700 {
+					t.nonInviteControllerCompleted()
+					return
+				} else {
+					t.nonInviteControllerProceeding()
+					return
+				}
+			}
+		}
+	}
+}
 
 func (t *ClientTransaction) Controller() {
 	if t.Invite {
@@ -284,11 +418,33 @@ func (t *ClientTransaction) Controller() {
 	}
 }
 
-func NewClientInviteTransaction(srv *Server, key *clientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
+func NewClientInviteTransaction(srv *Server, msg *Message, chanSize int) *ClientTransaction {
+	respChan := make(chan *Message, chanSize)
+	if msg.Via == nil {
+		msg.Via = NewViaHeaders()
+	}
+	branch := "branch=" + GenerateBranchParam()
+	v := NewViaHeaderUDP(srv.Address(), branch)
+	msg.Via.Insert(v)
+	key, err := GenerateClientTransactionKey(msg)
+	if err != nil {
+		return nil
+	}
 	return newClientTransaction(srv, true, key, msg, respChan)
 }
 
-func NewClientNonInviteTransaction(srv *Server, key *clientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
+func NewClientNonInviteTransaction(srv *Server, msg *Message, chanSize int) *ClientTransaction {
+	respChan := make(chan *Message, chanSize)
+	if msg.Via == nil {
+		msg.Via = NewViaHeaders()
+	}
+	branch := "branch=" + GenerateBranchParam()
+	v := NewViaHeaderUDP(srv.Address(), branch)
+	msg.Via.Insert(v)
+	key, err := GenerateClientTransactionKey(msg)
+	if err != nil {
+		return nil
+	}
 	return newClientTransaction(srv, false, key, msg, respChan)
 }
 
@@ -303,7 +459,6 @@ func newClientTransaction(srv *Server, isInvite bool, key *clientTransactionKey,
 	trans.Key = key
 	trans.request = msg
 	trans.resChan = make(chan *Message)
-	trans.toChan = respChan
 	go trans.Controller()
 	return trans
 }
@@ -316,7 +471,7 @@ func GenerateClientTransactionKey(msg *Message) (*clientTransactionKey, error) {
 		return nil, err
 	}
 	viaBranch, ok := params["branch"]
-	if !ok {
+	if !ok || len(viaBranch) == 0 {
 		// Branch parameter not found
 		return nil, ErrHeaderParseError
 	}
@@ -326,8 +481,26 @@ func GenerateClientTransactionKey(msg *Message) (*clientTransactionKey, error) {
 		return nil, err
 	}
 
-	key = &clientTransactionKey{viaBranch: viaBranch, cseqMethod: method}
+	key = &clientTransactionKey{viaBranch: viaBranch[0], cseqMethod: method}
 	return key, nil
+}
+
+type clientMessageReciever struct {
+	reciever chan *Message
+}
+
+func NewClientMessageReciever(qsize int) *clientMessageReciever {
+	cmr := new(clientMessageReciever)
+	cmr.reciever = make(chan *Message, qsize)
+	return cmr
+}
+
+func (cmr *clientMessageReciever) Reciver() chan *Message {
+	return cmr.reciever
+}
+
+func (cmr *clientMessageReciever) Recive() *Message {
+	return <-cmr.reciever
 }
 
 /* ****************************************************
@@ -655,7 +828,7 @@ func GenerateServerTransactionKey(msg *Message) (*serverTransactionKey, error) {
 		return nil, err
 	}
 	viaBranch, ok := params["branch"]
-	if !ok {
+	if !ok || len(viaBranch) == 0 {
 		// Branch parameter not found
 		return nil, ErrHeaderParseError
 	}
@@ -663,6 +836,6 @@ func GenerateServerTransactionKey(msg *Message) (*serverTransactionKey, error) {
 	if method == "ACK" {
 		method = "INVITE"
 	}
-	key = &serverTransactionKey{viaBranch: viaBranch, sentBy: sentBy, method: method}
+	key = &serverTransactionKey{viaBranch: viaBranch[0], sentBy: sentBy, method: method}
 	return key, nil
 }

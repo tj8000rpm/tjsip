@@ -377,6 +377,34 @@ type URI struct {
 	RawFragment    string // encoded fragment hint (see EscapedFragment method)
 }
 
+func (uri *URI) Clone() (cp *URI) {
+	if uri == nil {
+		return nil
+	}
+	cp = new(URI)
+	cp.Scheme = uri.Scheme
+	cp.Opaque = uri.Opaque
+	user := uri.User.Username()
+	pass, ok := uri.User.Password()
+	if ok {
+		cp.User = url.UserPassword(user, pass)
+	} else {
+		cp.User = url.User(user)
+	}
+	cp.Host = uri.Host
+	cp.Path = uri.Path
+	cp.RawPath = uri.RawPath
+	cp.ForceParameter = uri.ForceParameter
+	cp.RawParameter = uri.RawParameter
+	cp.ForceQuery = uri.ForceQuery
+	cp.RawQuery = uri.RawQuery
+	cp.Absolute = uri.Absolute
+	cp.Fragment = uri.Fragment
+	cp.RawFragment = uri.RawFragment
+
+	return
+}
+
 // Maybe rawuri is of the form scheme:path.
 // (Scheme must be [a-zA-Z][a-zA-Z0-9+-.]*)
 // If so, return scheme, path; else return "", rawuri.
