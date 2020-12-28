@@ -35,6 +35,11 @@ func TestPrefixTrieSearch(t *testing.T) {
 	if r4 != nil {
 		t.Errorf("expect %v: but '%v'", nil, r4)
 	}
+
+	r5 := p.Search("031234123412341234")
+	if r5.fwd != f1 {
+		t.Errorf("expect %v: but '%v'", f1, r5.fwd)
+	}
 }
 
 func TestPrefixTrieRemove(t *testing.T) {
