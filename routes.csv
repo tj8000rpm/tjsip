@@ -1,2 +1,2 @@
-service@example.com,127.0.0.1,example.com
-128@example.com,192.168.100.128,example.com
+service,127.0.0.1,example.com
+128,192.168.100.128,example.com
