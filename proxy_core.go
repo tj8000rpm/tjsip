@@ -265,12 +265,12 @@ func lookupTrunkType(addr string) int {
 }
 
 func route(request string) (fwdAddr, fwdDomain string, found bool) {
-	rt, ok := routes.table[request]
-	if !ok {
+	rt := routes.table.Search(request)
+	if rt == nil {
 		return "", "", false
 	}
-	fwdAddr = rt.Addr
-	fwdDomain = rt.Domain
+	fwdAddr = rt.fwd.Addr
+	fwdDomain = rt.fwd.Domain
 	return
 }
 
