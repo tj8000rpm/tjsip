@@ -106,7 +106,7 @@ func main() {
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
 	sip.LogLevel = sip.LogDebug
-	sip.LogLevel = sip.LogInfo
+	//sip.LogLevel = sip.LogInfo
 
 	dialogs = NewDialogs()
 	earlyDialogs = NewEarlyDialogs()
