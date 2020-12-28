@@ -41,15 +41,17 @@ var callGap = callGapControl{enable: false, last: time.Now()}
 
 var dialogs *Dialogs
 var earlyDialogs *EarlyDialogs
+var responseCtxs *ResponseCtxs
 
 func main() {
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
 	sip.LogLevel = sip.LogDebug
-	//sip.LogLevel = sip.LogInfo
+	sip.LogLevel = sip.LogInfo
 
 	dialogs = NewDialogs()
 	earlyDialogs = NewEarlyDialogs()
+	//responseCtxs =
 
 	go func() {
 		for {

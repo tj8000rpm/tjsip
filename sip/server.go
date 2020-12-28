@@ -135,12 +135,12 @@ type Server struct {
 
 type ServerTransactions struct {
 	Mu           sync.Mutex
-	Transactions map[serverTransactionKey]*ServerTransaction
+	Transactions map[ServerTransactionKey]*ServerTransaction
 }
 
 type ClientTransactions struct {
 	Mu           sync.Mutex
-	Transactions map[clientTransactionKey]*ClientTransaction
+	Transactions map[ClientTransactionKey]*ClientTransaction
 }
 
 func (s *Server) logf(format string, args ...interface{}) {
@@ -309,7 +309,7 @@ func (s *Server) AddServerTransaction(transaction *ServerTransaction) error {
 	s.serverTransactions.Mu.Lock()
 	defer s.serverTransactions.Mu.Unlock()
 	if s.serverTransactions.Transactions == nil {
-		s.serverTransactions.Transactions = make(map[serverTransactionKey]*ServerTransaction)
+		s.serverTransactions.Transactions = make(map[ServerTransactionKey]*ServerTransaction)
 	}
 	key := transaction.Key
 	_, ok := s.serverTransactions.Transactions[*key]
@@ -346,7 +346,7 @@ func (s *Server) AddClientTransaction(transaction *ClientTransaction) error {
 	defer s.clientTransactions.Mu.Unlock()
 	key := transaction.Key
 	if s.clientTransactions.Transactions == nil {
-		s.clientTransactions.Transactions = make(map[clientTransactionKey]*ClientTransaction)
+		s.clientTransactions.Transactions = make(map[ClientTransactionKey]*ClientTransaction)
 	}
 	s.clientTransactions.Transactions[*key] = transaction
 	s.Debugf("Client Transaction size: %d", len(s.clientTransactions.Transactions))
@@ -370,7 +370,11 @@ func (s *Server) DeleteClientTransaction(transaction *ClientTransaction) error {
 	return nil
 }
 
-func (s *Server) lookupServerTransaction(query *serverTransactionKey) Transaction {
+func (s *Server) LookupServerTransaction(query *ServerTransactionKey) Transaction {
+	return s.lookupServerTransaction(query)
+}
+
+func (s *Server) lookupServerTransaction(query *ServerTransactionKey) Transaction {
 	s.serverTransactions.Mu.Lock()
 	defer s.serverTransactions.Mu.Unlock()
 	transaction, ok := s.serverTransactions.Transactions[*query]
@@ -382,7 +386,7 @@ func (s *Server) lookupServerTransaction(query *serverTransactionKey) Transactio
 	return transaction
 }
 
-func (s *Server) lookupClientTransaction(query *clientTransactionKey) Transaction {
+func (s *Server) lookupClientTransaction(query *ClientTransactionKey) Transaction {
 	s.clientTransactions.Mu.Lock()
 	defer s.clientTransactions.Mu.Unlock()
 	transaction, ok := s.clientTransactions.Transactions[*query]

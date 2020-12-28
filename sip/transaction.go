@@ -43,6 +43,7 @@ type Transaction interface {
 	Handle(*Message)
 	Controller()
 	Destroy()
+	WriteMessage(*Message)
 }
 
 type BaseTransaction struct {
@@ -88,13 +89,13 @@ func (t *BaseTransaction) DestroyChanel() {
  * Client Transaction
  * ****************************************************/
 
-type clientTransactionKey struct {
+type ClientTransactionKey struct {
 	viaBranch  string
 	cseqMethod string
 }
 type ClientTransaction struct {
 	BaseTransaction
-	Key     *clientTransactionKey
+	Key     *ClientTransactionKey
 	request *Message
 	ack     *Message
 	resChan chan *Message
@@ -448,7 +449,7 @@ func NewClientNonInviteTransaction(srv *Server, msg *Message, chanSize int) *Cli
 	return newClientTransaction(srv, false, key, msg, respChan)
 }
 
-func newClientTransaction(srv *Server, isInvite bool, key *clientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
+func newClientTransaction(srv *Server, isInvite bool, key *ClientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
 	trans := new(ClientTransaction)
 	trans.State = TransactionStateInit
 	trans.Invite = isInvite
@@ -463,8 +464,8 @@ func newClientTransaction(srv *Server, isInvite bool, key *clientTransactionKey,
 	return trans
 }
 
-func GenerateClientTransactionKey(msg *Message) (*clientTransactionKey, error) {
-	var key *clientTransactionKey
+func GenerateClientTransactionKey(msg *Message) (*ClientTransactionKey, error) {
+	var key *ClientTransactionKey
 	_, _, params, err := msg.GetTopMostVia()
 	if err != nil {
 		// Malformed topmost via header
@@ -481,7 +482,7 @@ func GenerateClientTransactionKey(msg *Message) (*clientTransactionKey, error) {
 		return nil, err
 	}
 
-	key = &clientTransactionKey{viaBranch: viaBranch[0], cseqMethod: method}
+	key = &ClientTransactionKey{viaBranch: viaBranch[0], cseqMethod: method}
 	return key, nil
 }
 
@@ -506,7 +507,7 @@ func (cmr *clientMessageReciever) Recive() *Message {
 /* ****************************************************
  * Server Transaction
  * ****************************************************/
-type serverTransactionKey struct {
+type ServerTransactionKey struct {
 	viaBranch string
 	sentBy    string
 	method    string
@@ -514,7 +515,7 @@ type serverTransactionKey struct {
 
 type ServerTransaction struct {
 	BaseTransaction
-	Key            *serverTransactionKey
+	Key            *ServerTransactionKey
 	request        *Message
 	provisionalRes *Message
 	finalRes       *Message
@@ -798,15 +799,15 @@ func (t *ServerTransaction) Controller() {
 	}
 }
 
-func NewServerInviteTransaction(srv *Server, key *serverTransactionKey, msg *Message) *ServerTransaction {
+func NewServerInviteTransaction(srv *Server, key *ServerTransactionKey, msg *Message) *ServerTransaction {
 	return newServerTransaction(srv, true, key, msg)
 }
 
-func NewServerNonInviteTransaction(srv *Server, key *serverTransactionKey, msg *Message) *ServerTransaction {
+func NewServerNonInviteTransaction(srv *Server, key *ServerTransactionKey, msg *Message) *ServerTransaction {
 	return newServerTransaction(srv, false, key, msg)
 }
 
-func newServerTransaction(srv *Server, isInvite bool, key *serverTransactionKey, msg *Message) *ServerTransaction {
+func newServerTransaction(srv *Server, isInvite bool, key *ServerTransactionKey, msg *Message) *ServerTransaction {
 	trans := new(ServerTransaction)
 	trans.State = TransactionStateInit
 	trans.Invite = isInvite
@@ -820,8 +821,8 @@ func newServerTransaction(srv *Server, isInvite bool, key *serverTransactionKey,
 	return trans
 }
 
-func GenerateServerTransactionKey(msg *Message) (*serverTransactionKey, error) {
-	var key *serverTransactionKey
+func GenerateServerTransactionKey(msg *Message) (*ServerTransactionKey, error) {
+	var key *ServerTransactionKey
 	_, sentBy, params, err := msg.GetTopMostVia()
 	if err != nil {
 		// Malformed topmost via header
@@ -836,6 +837,6 @@ func GenerateServerTransactionKey(msg *Message) (*serverTransactionKey, error) {
 	if method == "ACK" {
 		method = "INVITE"
 	}
-	key = &serverTransactionKey{viaBranch: viaBranch[0], sentBy: sentBy, method: method}
+	key = &ServerTransactionKey{viaBranch: viaBranch[0], sentBy: sentBy, method: method}
 	return key, nil
 }

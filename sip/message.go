@@ -101,15 +101,31 @@ func (msg *Message) Clone() (cpMsg *Message) {
 	cpMsg.ProtoMajor = msg.ProtoMajor
 	cpMsg.ProtoMinor = msg.ProtoMinor
 
-	cpMsg.To = msg.To.Clone()
-	cpMsg.From = msg.From.Clone()
-	cpMsg.Via = msg.Via.Clone()
-	cpMsg.CallID = msg.CallID.Clone()
-	cpMsg.CSeq = msg.CSeq.Clone()
-	cpMsg.MaxForwards = msg.MaxForwards.Clone()
-	cpMsg.Contact = msg.Contact.Clone()
+	if msg.To != nil {
+		cpMsg.To = msg.To.Clone()
+	}
+	if msg.From != nil {
+		cpMsg.From = msg.From.Clone()
+	}
+	if msg.Via != nil {
+		cpMsg.Via = msg.Via.Clone()
+	}
+	if msg.CallID != nil {
+		cpMsg.CallID = msg.CallID.Clone()
+	}
+	if msg.CSeq != nil {
+		cpMsg.CSeq = msg.CSeq.Clone()
+	}
+	if msg.MaxForwards != nil {
+		cpMsg.MaxForwards = msg.MaxForwards.Clone()
+	}
+	if msg.Contact != nil {
+		cpMsg.Contact = msg.Contact.Clone()
+	}
 
-	cpMsg.Header = msg.Header.Clone()
+	if msg.Header != nil {
+		cpMsg.Header = msg.Header.Clone()
+	}
 
 	cpMsg.Body = make([]byte, len(msg.Body))
 	copy(cpMsg.Body, msg.Body)
