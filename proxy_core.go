@@ -16,25 +16,19 @@ const (
 
 type ResponseCtx = map[sip.ClientTransactionKey]bool
 type ResponseCtxs struct {
-	stToCt map[ServerTransactionKey]*ResponseCtx
-	ctToSt map[ClientTransactionKey]ServerTransactionKey
+	stToCt map[sip.ServerTransactionKey]*ResponseCtx
+	ctToSt map[sip.ClientTransactionKey]sip.ServerTransactionKey
 }
 
 func (ctxs *ResponseCtxs) GetSt(ct sip.ClientTransactionKey) sip.ServerTransactionKey {
-	st, ok := ctxs.ctToSt[ct]
-	if !ok {
-		return nil
-	}
+	st, _ := ctxs.ctToSt[ct]
 	return st
 }
 
-func (ctxs *ResponseCtxs) GetSt(ct sip.ClientTransactionKey) sip.ServerTransactionKey {
-	st, ok := ctxs.ctToSt[ct]
-	if !ok {
-		return nil
-	}
-	return st
-}
+// func (ctxs *ResponseCtxs) GetSt(ct sip.ClientTransactionKey) sip.ServerTransactionKey {
+// 	st, _ := ctxs.ctToSt[ct]
+// 	return st
+// }
 
 func (ctxs *ResponseCtxs) Add(st sip.ServerTransactionKey, ct sip.ClientTransactionKey) bool {
 	_, ok := ctxs.stToCt[st]
@@ -44,20 +38,8 @@ func (ctxs *ResponseCtxs) Add(st sip.ServerTransactionKey, ct sip.ClientTransact
 	if ctxs.stToCt[st] == nil {
 		return false
 	}
-	ctxs.stToCt[st][ct] = true
+	(*ctxs.stToCt[st])[ct] = true
 	ctxs.ctToSt[ct] = st
-	return true
-}
-
-func (ctxs *ResponseCtxs) GetServerTxn(ct sip.ClientTransactionKey) bool {
-	_, ok := ctxs[st]
-	if !ok {
-		ctxs[st] = new(ResponseCtx)
-	}
-	if ctxs[st] == nil {
-		return false
-	}
-	ctxs[st][ct] = true
 	return true
 }
 
@@ -66,8 +48,8 @@ func NewResponseCtxs() *ResponseCtxs {
 	if ctx == nil {
 		return nil
 	}
-	ctx.stToCt = make(map[ServerTransactionKey]*ResponseCtx)
-	ctx.ctToSt = make(map[ClientTransactionKey]ServerTransactionKey)
+	ctx.stToCt = make(map[sip.ServerTransactionKey]*ResponseCtx)
+	ctx.ctToSt = make(map[sip.ClientTransactionKey]sip.ServerTransactionKey)
 	if ctx.stToCt == nil || ctx.ctToSt == nil {
 		return nil
 	}
