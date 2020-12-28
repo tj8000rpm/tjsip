@@ -2,6 +2,7 @@ package main
 
 import (
 	//"github.com/tj8000rpm/tjsip/sip"
+	"encoding/csv"
 	"log"
 	"os"
 	"sip/sip"
@@ -37,6 +38,64 @@ func (stat *callStat) Increment(response int) {
 
 var stat = callStat{}
 
+type Fwd struct {
+	Addr   string
+	Domain string
+}
+
+type Routes struct {
+	mu    sync.Mutex
+	table map[string]*Fwd
+}
+
+var routes *Routes
+
+func loadRoutes() bool {
+	if routes == nil {
+		routes = new(Routes)
+		if routes == nil {
+			return false
+		}
+		routes.table = make(map[string]*Fwd)
+		if routes.table == nil {
+			return false
+		}
+	}
+	fp, err := os.Open("routes.csv")
+	if err != nil {
+		panic(err)
+	}
+	defer fp.Close()
+
+	reader := csv.NewReader(fp)
+	var line []string
+
+	for {
+		line, err = reader.Read()
+		if err != nil {
+			break
+		}
+		if len(line) != 3 {
+			return false
+		}
+		fwd := new(Fwd)
+		if fwd == nil {
+			return false
+		}
+		fwd.Addr = line[1]
+		fwd.Domain = line[2]
+		routes.table[line[0]] = fwd
+	}
+
+	log.Printf("load route \n")
+
+	for k, v := range routes.table {
+		log.Printf(" %s -> (%s, %s)\n", k, v.Addr, v.Domain)
+	}
+
+	return true
+}
+
 var callGap = callGapControl{enable: false, last: time.Now()}
 
 var dialogs *Dialogs
@@ -52,6 +111,10 @@ func main() {
 	dialogs = NewDialogs()
 	earlyDialogs = NewEarlyDialogs()
 	//responseCtxs =
+
+	if !loadRoutes() {
+		return
+	}
 
 	go func() {
 		for {

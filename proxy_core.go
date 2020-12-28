@@ -264,9 +264,13 @@ func lookupTrunkType(addr string) int {
 	return TrunkSubscriber
 }
 
-func route(request string) (fwdAddr, fwdDomain string) {
-	fwdAddr = "127.0.0.1:5062"
-	fwdDomain = "localhost:5062"
+func route(request string) (fwdAddr, fwdDomain string, found bool) {
+	rt, ok := routes.table[request]
+	if !ok {
+		return "", "", false
+	}
+	fwdAddr = rt.Addr
+	fwdDomain = rt.Domain
 	return
 }
 
@@ -445,9 +449,13 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	case "tel":
 		requestService = requestUri.Host
 	}
-	fwdAddr, fwdDomain := route(requestService)
+	fwdAddr, fwdDomain, found := route(requestService)
 
-	fmt.Printf("Forwad to request : %s@%s / %s\n", requestService, fwdDomain, fwdAddr)
+	if !found {
+		// TODO: Return not found
+	}
+
+	fmt.Printf("Forward to request : %s@%s / %s\n", requestService, fwdDomain, fwdAddr)
 
 	fwdMsg := msg.Clone()
 	fwdMsg.RequestURI.Host = fwdDomain
