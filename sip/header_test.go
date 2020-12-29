@@ -1001,7 +1001,7 @@ func TestNewContactHeaders(t *testing.T) {
 	}
 }
 
-func TestParseNameAddrFormats(t *testing.T) {
+func TestParseNameAddrFormats1(t *testing.T) {
 	c := NewNameAddrFormatHeaders()
 	s := ("<sip:watson@worcester.bell-telephone.com;lr>, " +
 		"sip:watson@bell-telephone.com;lr")
@@ -1029,6 +1029,41 @@ func TestParseNameAddrFormats(t *testing.T) {
 		t.Errorf("Not valid NameAddrFormat DisplayName: expect %v, but given '%v'", expect, actual)
 	}
 	if actual, expect := sipc2.Addr.Uri.String(), "sip:watson@bell-telephone.com;lr"; actual != expect {
+		t.Errorf("Not valid NameAddrFormat URI: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc2.RawParameter, ""; actual != expect {
+		t.Errorf("Not valid NameAddrFormat RawParameter: expect %v, but given '%v'", expect, actual)
+	}
+}
+
+func TestParseNameAddrFormats2(t *testing.T) {
+	c := NewNameAddrFormatHeaders()
+
+	s := "<sip:192.168.100.51:5060;lr>, <sip:192.168.100.52:5060;lr>"
+	ParseNameAddrFormats(s, c)
+	if c == nil {
+		t.Errorf("NameAddrFormats still nil")
+		return
+	}
+	if len(c.Header) != 2 {
+		t.Errorf("NameAddrFormats length is not valid")
+		return
+	}
+	sipc1 := c.Header[0]
+	if actual, expect := sipc1.Addr.DisplayName, ""; actual != expect {
+		t.Errorf("Not valid NameAddrFormat DisplayName: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc1.Addr.Uri.String(), "sip:192.168.100.51:5060;lr"; actual != expect {
+		t.Errorf("Not valid NameAddrFormat URI: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc1.RawParameter, ""; actual != expect {
+		t.Errorf("Not valid NameAddrFormat RawParameter: expect %v, but given '%v'", expect, actual)
+	}
+	sipc2 := c.Header[1]
+	if actual, expect := sipc2.Addr.DisplayName, ""; actual != expect {
+		t.Errorf("Not valid NameAddrFormat DisplayName: expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := sipc2.Addr.Uri.String(), "sip:192.168.100.52:5060;lr"; actual != expect {
 		t.Errorf("Not valid NameAddrFormat URI: expect %v, but given '%v'", expect, actual)
 	}
 	if actual, expect := sipc2.RawParameter, ""; actual != expect {

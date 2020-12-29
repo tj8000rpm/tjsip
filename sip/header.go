@@ -148,7 +148,7 @@ func ParseNameAddr(s string) (n *NameAddr, trail string) {
 	if innerQuated || innerLtGt {
 		return
 	}
-	trail = strings.Trim(s[ue:], " <>")
+	trail = strings.TrimLeft(s[ue:], " <>")
 	n = NewNameAddrUriString(display, uriStr)
 
 	return
