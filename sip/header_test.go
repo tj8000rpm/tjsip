@@ -475,6 +475,20 @@ func TestNewViaHeaders(t *testing.T) {
 	if actual != expect {
 		t.Errorf("Invalid WriteHeader func\n expeect-----\n '%v', but given ----\n '%v'", expect, actual)
 	}
+	if via := v.Pop(); via.SentBy != "10.0.0.1" || via.RawParameter != "foo=bar" {
+		t.Errorf("Invalid pop via")
+	}
+	if via := v.TopMost(); via.SentBy != "127.0.0.1" || via.RawParameter != "key=value" {
+		t.Errorf("Invalid top most via")
+	}
+	if via := v.Length(); via != 1 {
+		t.Errorf("Invalid Length() via")
+	}
+	expect = "Via: SIP/2.0/UDP 127.0.0.1;key=value\r\n"
+	actual = v.WriteHeader()
+	if actual != expect {
+		t.Errorf("Invalid WriteHeader func\n expeect-----\n '%v', but given ----\n '%v'", expect, actual)
+	}
 }
 
 func TestParseVias(t *testing.T) {

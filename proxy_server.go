@@ -39,9 +39,7 @@ var stat = callStat{}
 
 var callGap = callGapControl{enable: false, last: time.Now()}
 
-var dialogs *Dialogs
-var earlyDialogs *EarlyDialogs
-var responseCtxs *ResponseCtxs
+var responseContexts *ResponseCtxs
 
 func main() {
 	sip.RecieveBufSizeB = 9000
@@ -49,11 +47,9 @@ func main() {
 	sip.LogLevel = sip.LogDebug
 	//sip.LogLevel = sip.LogInfo
 
-	dialogs = NewDialogs()
-	earlyDialogs = NewEarlyDialogs()
-	//responseCtxs =
+	responseContexts = NewResponseCtxs()
 
-	if !loadRoutes() {
+	if !loadRoutes(sip.LogLevel >= sip.LogDebug) {
 		return
 	}
 

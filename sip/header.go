@@ -377,6 +377,15 @@ func (v *ViaHeaders) Get(index int) *Via {
 	return v.Header[lastindex-index]
 }
 
+func (v *ViaHeaders) Pop() *Via {
+	if v.Length() == 0 {
+		return nil
+	}
+	via := v.Get(0)
+	v.Header = v.Header[:v.Length()-1]
+	return via
+}
+
 func (v *ViaHeaders) Length() int {
 	return len(v.Header)
 }

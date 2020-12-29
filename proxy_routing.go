@@ -117,14 +117,16 @@ type Routes struct {
 
 var routes *Routes
 
-func loadRoutes() bool {
+func loadRoutes(showDebugMsg bool) bool {
 	if routes == nil {
 		routes = new(Routes)
 		if routes == nil {
+			log.Printf("memory allocation fail\n")
 			return false
 		}
 		routes.table = NewPrefixTrie(nil)
 		if routes.table == nil {
+			log.Printf("memory allocation fail\n")
 			return false
 		}
 	}
@@ -142,20 +144,32 @@ func loadRoutes() bool {
 	for {
 		line, err = reader.Read()
 		if err != nil {
+			log.Printf("CSV open error\n")
 			break
 		}
 		if len(line) != 3 {
+			log.Printf("invalid file format\n")
 			return false
 		}
 		fwd := NewFwd(line[1], line[2])
 		if fwd == nil {
+			log.Printf("memory allocation fail\n")
 			return false
 		}
 		routes.table.Add(line[0], fwd)
 	}
 
-	log.Printf("load route \n")
+	if showDebugMsg {
+		log.Printf("load route \n")
+		routes.table.Dump()
+	}
 
-	routes.table.Dump()
 	return true
+}
+
+func lookupRemoteAddr(uri_str string) string {
+	// Retrun IPaddress/Port
+	// Like "192.168.0.128:5060"
+
+	return "192.168.0.128:5060"
 }
