@@ -282,6 +282,9 @@ func TestMessageCopy(t *testing.T) {
 	msg.Contact.Add(NewContactHeaderFromString("", "sip:alice@pc33.atlanta.com:5060;user=phone", ""))
 	msg.Contact.Add(NewContactHeaderStar())
 
+	msg.ContentLength = 5
+	msg.Body = []byte("hello")
+
 	cp := msg.Clone()
 
 	if actual, expect := msg.To.String(), cp.To.String(); actual != expect {
@@ -303,6 +306,9 @@ func TestMessageCopy(t *testing.T) {
 		t.Errorf("expect %s, but given '%s'", expect, actual)
 	}
 	if actual, expect := msg.Contact.WriteHeader(), cp.Contact.WriteHeader(); actual != expect {
+		t.Errorf("expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := string(cp.Body), string(msg.Body); actual != expect {
 		t.Errorf("expect %s, but given '%s'", expect, actual)
 	}
 }

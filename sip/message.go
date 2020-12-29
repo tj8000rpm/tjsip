@@ -127,10 +127,10 @@ func (msg *Message) Clone() (cpMsg *Message) {
 		cpMsg.Header = msg.Header.Clone()
 	}
 
-	cpMsg.Body = make([]byte, len(msg.Body))
-	copy(cpMsg.Body, msg.Body)
-
 	cpMsg.ContentLength = msg.ContentLength
+
+	cpMsg.Body = append([]byte{}, msg.Body...)
+
 	cpMsg.Close = msg.Close
 
 	cpMsg.Cancel = make(<-chan struct{})
@@ -307,7 +307,9 @@ func (r *Message) writeResponse(w io.Writer) (err error) {
 
 	fmt.Fprintf(w, "\r\n")
 
-	// TODO: Write Body
+	if r.ContentLength > 0 {
+		w.Write(r.Body[:r.ContentLength])
+	}
 	return nil
 }
 
@@ -321,7 +323,9 @@ func (r *Message) writeRequest(w io.Writer) (err error) {
 
 	fmt.Fprintf(w, "\r\n")
 
-	// TODO: Write Body
+	if r.ContentLength > 0 {
+		w.Write(r.Body[:r.ContentLength])
+	}
 	return nil
 }
 
@@ -600,12 +604,13 @@ func readMessage(msg *Message, b *bufio.Reader) (err error) {
 	msg.Header = http.Header(mimeHeader)
 
 	msg.parseHeader()
-
+	msg.Body = make([]byte, 4096)
 	len, err := b.Read(msg.Body)
 	if err != nil {
 		return err
 	}
 	msg.ContentLength = int64(len)
+	msg.Body = msg.Body[:len]
 
 	return nil
 }
