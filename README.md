@@ -1,5 +1,11 @@
 ## TODO
 
+### 雑多なやらないといけなこと
+
+- Via ヘッダのrecievedパラメータの処理
+- Viaはトランザクション以下で追加してるけどそれでいいか？
+
+
 ### For Signalling
 - Handler customize
 - Provide SIP parse helper functions

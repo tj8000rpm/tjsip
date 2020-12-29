@@ -165,3 +165,7 @@ func loadRoutes(showDebugMsg bool) bool {
 
 	return true
 }
+
+func resuloveDomain(s string) string {
+	return s
+}

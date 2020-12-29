@@ -175,6 +175,11 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	_ = from
 
 	fwdMsg := msg.Clone()
+	topmost := fwdMsg.Via.TopMost()
+	//if topmost.SentBy != msg.RemoteAddr {
+	if true {
+		topmost.RawParam = fmt.Sprintf("recieved=%s;", msg.RemoteAddr) + topmost.RawParam
+	}
 	routes := fwdMsg.Header.Values("Route")
 	if len(routes) != 0 {
 		// this message will ini-invite
@@ -187,7 +192,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 			}
 			next = uri.Host
 		}
-		fwdMsg.RemoteAddr = next
+		fwdMsg.RemoteAddr = resolveDomain(next)
 		fwdMsg.Header.Del("Route")
 		for _, route := range routes[1:] {
 			fwdMsg.Header.Add("Route", route)
@@ -215,7 +220,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 			// TODO: Return not found
 		}
 
-		fmt.Printf("Forward to request : %s@%s / %s\n", requestService, fwdDomain, fwdAddr)
+		// fmt.Printf("Forward to request : %s@%s / %s\n", requestService, fwdDomain, fwdAddr)
 		fwdMsg.RequestURI.Host = fwdDomain
 		fwdMsg.RemoteAddr = fwdAddr
 
@@ -274,7 +279,7 @@ func ackHandler(srv *sip.Server, msg *sip.Message) error {
 		next = uri.Host
 	}
 
-	fwdMsg.RemoteAddr = next
+	fwdMsg.RemoteAddr = resolveDomain(next)
 	fwdMsg.Header.Del("Route")
 	for _, route := range routes[1:] {
 		fwdMsg.Header.Add("Route", route)
