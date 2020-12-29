@@ -49,11 +49,14 @@
       [last_To:];tag=[pid]SIPpTag01[call_number]
       [last_Call-ID:]
       [last_CSeq:]
+      [last_Record-Route:]
       Contact: <sip:[local_ip]:[local_port];transport=[transport]>
       Content-Length: 0
 
     ]]>
   </send>
+
+  <pause milliseconds="3000"/>
 
   <send retrans="500">
     <![CDATA[
@@ -64,6 +67,7 @@
       [last_To:];tag=[pid]SIPpTag01[call_number]
       [last_Call-ID:]
       [last_CSeq:]
+      [last_Record-Route:]
       Contact: <sip:[local_ip]:[local_port];transport=[transport]>
       Content-Type: application/sdp
       Content-Length: [len]

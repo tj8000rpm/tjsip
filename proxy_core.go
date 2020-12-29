@@ -208,7 +208,6 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 			// TODO: Return not found
 		}
 
-		// fmt.Printf("Forward to request : %s@%s / %s\n", requestService, fwdDomain, fwdAddr)
 		fwdMsg.RequestURI.Host = fwdDomain
 		fwdMsg.RemoteAddr = fwdAddr
 
@@ -257,40 +256,36 @@ func generateForwardingRequest(msg *sip.Message) *sip.Message {
 
 func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 	nextIsLR := false
-	routes := msg.Header.Values("Route")
-	if len(routes) == 0 {
-		return nil
-	}
 
 	fwdMsg := generateForwardingRequest(msg)
 	next := fwdMsg.RequestURI.Host
-	var headOfRrouteURI *sip.URI
+	routes := fwdMsg.Header.Values("Route")
+	var headOfRouteURI *sip.URI
 	if len(routes) > 1 {
-		headOfRrouteURI, err := sip.Parse(routes[1])
+		headOfRouteURI, err := sip.Parse(routes[1])
 		if err != nil {
 			return nil
 		}
-		next = headOfRrouteURI.Host
+		next = headOfRouteURI.Host
 		// check a `lr` flag in top of route header
-		_, nextIsLR = headOfRrouteURI.Parameter()["lr"]
+		_, nextIsLR = headOfRouteURI.Parameter()["lr"]
 	}
 
 	fwdMsg.RemoteAddr = resolveDomain(next)
-	fwdMsg.Header.Del("Route")
 
 	routeOffset := 2
 	if nextIsLR {
 		routeOffset = 1
 	}
 
+	fwdMsg.Header.Del("Route")
 	for i := routeOffset; i < len(routes); i++ {
 		fwdMsg.Header.Add("Route", routes[i])
 	}
-	if !nextIsLR {
+	if headOfRouteURI != nil && !nextIsLR {
 		// In case of strict routing
 		fwdMsg.Header.Add("Route", fwdMsg.RequestURI.String())
-		fwdMsg.RequestURI = headOfRrouteURI
-		fmt.Printf("%v\n", fwdMsg.RequestURI)
+		fwdMsg.RequestURI = headOfRouteURI
 	}
 
 	return fwdMsg
@@ -300,7 +295,6 @@ func ackHandler(srv *sip.Server, msg *sip.Message) error {
 	srv.Debugf("Dialog was established\n")
 	fwdMsg := generateForwardingRequestByRouteHeader(msg)
 	srv.WriteMessage(fwdMsg)
-
 	return nil
 }
 
