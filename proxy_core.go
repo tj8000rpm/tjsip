@@ -157,13 +157,12 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 		// Message not forwarded
 		return nil
 	}
-	if recieved := topMostVia.Parameter().Get("received"); received != "" {
+	if received := topMostVia.Parameter().Get("received"); received != "" {
 		cpMsg.RemoteAddr = received
 	} else {
 		cpMsg.RemoteAddr = topMostVia.SentBy
 	}
 	srvTxn.WriteMessage(cpMsg)
-
 	return nil
 }
 
@@ -181,7 +180,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	fwdMsg := msg.Clone()
 	topmost := fwdMsg.Via.TopMost()
 	if topmost.SentBy != msg.RemoteAddr {
-		topmost.RawParameter = fmt.Sprintf("recieved=%s;", msg.RemoteAddr) + topmost.RawParameter
+		topmost.RawParameter = fmt.Sprintf("received=%s;", msg.RemoteAddr) + topmost.RawParameter
 	}
 	routes := fwdMsg.Header.Values("Route")
 	if len(routes) != 0 {

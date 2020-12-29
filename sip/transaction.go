@@ -34,7 +34,7 @@ const (
 
 var (
 	ErrTransactionDuplicated        = &ProtocolError{"transaction duplicated"}
-	ErrTransactionUnexpectedMessage = &ProtocolError{"transaction recieve unexpected message"}
+	ErrTransactionUnexpectedMessage = &ProtocolError{"transaction receive unexpected message"}
 	ErrTransactionTransportError    = &ProtocolError{"transport error"}
 	ErrTransactionClosed            = &ProtocolError{"transaction was closed"}
 )
@@ -140,7 +140,7 @@ func (t *ClientTransaction) nonInviteControllerCompleted() {
 	for {
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case <-timerKChan:
 			t.Server.Debugf("[%v] Timer K(%v) fire", t.Key, TimerK)
@@ -168,7 +168,7 @@ func (t *ClientTransaction) inviteControllerCompleted() {
 	for {
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case <-timerDChan:
 			t.Server.Debugf("[%v] Timer D(%v) fire", t.Key, TimerD)
@@ -194,7 +194,7 @@ func (t *ClientTransaction) nonInviteControllerProceeding() {
 		t.Server.Debugf("Ready to response")
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case <-time.After(timerE):
 			// retransmit request
@@ -238,7 +238,7 @@ func (t *ClientTransaction) inviteControllerProceeding() {
 	for {
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case msg := <-t.resChan:
 			if msg == nil {
@@ -275,7 +275,7 @@ func (t *ClientTransaction) inviteController() {
 	// Before sent INVITE
 	select {
 	case <-t.DelChan:
-		t.Server.Debugf("[%v] Recived delete signal", t.Key)
+		t.Server.Debugf("[%v] Received delete signal", t.Key)
 		return
 	case msg := <-t.TuChan:
 		if !msg.Request || msg.Method != "INVITE" {
@@ -298,7 +298,7 @@ func (t *ClientTransaction) inviteController() {
 		t.Server.Debugf("Ready to response")
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case <-time.After(timerA):
 			// retransmit final response
@@ -349,7 +349,7 @@ func (t *ClientTransaction) nonInviteController() {
 	// Before State Trying
 	select {
 	case <-t.DelChan:
-		t.Server.Debugf("[%v] Recived delete signal", t.Key)
+		t.Server.Debugf("[%v] Received delete signal", t.Key)
 		return
 	case msg := <-t.TuChan:
 		if !msg.Request || msg.Method == "INVITE" {
@@ -372,7 +372,7 @@ func (t *ClientTransaction) nonInviteController() {
 		t.Server.Debugf("Ready to response")
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case <-time.After(timerE):
 			// retransmit request
@@ -486,22 +486,22 @@ func GenerateClientTransactionKey(msg *Message) (*ClientTransactionKey, error) {
 	return key, nil
 }
 
-type clientMessageReciever struct {
-	reciever chan *Message
+type clientMessageReceiver struct {
+	receiver chan *Message
 }
 
-func NewClientMessageReciever(qsize int) *clientMessageReciever {
-	cmr := new(clientMessageReciever)
-	cmr.reciever = make(chan *Message, qsize)
+func NewClientMessageReceiver(qsize int) *clientMessageReceiver {
+	cmr := new(clientMessageReceiver)
+	cmr.receiver = make(chan *Message, qsize)
 	return cmr
 }
 
-func (cmr *clientMessageReciever) Reciver() chan *Message {
-	return cmr.reciever
+func (cmr *clientMessageReceiver) Receiver() chan *Message {
+	return cmr.receiver
 }
 
-func (cmr *clientMessageReciever) Recive() *Message {
-	return <-cmr.reciever
+func (cmr *clientMessageReceiver) Receive() *Message {
+	return <-cmr.receiver
 }
 
 /* ****************************************************
@@ -530,7 +530,7 @@ func (t *ServerTransaction) Handle(req *Message) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 	if req.Method == "ACK" {
-		t.Server.Debugf("ACK Recived")
+		t.Server.Debugf("ACK Received")
 		t.TuChan <- req
 		return
 	}
@@ -614,7 +614,7 @@ func (t *ServerTransaction) inviteController() {
 	t.State = TransactionStateProceeding
 	select {
 	case <-t.DelChan:
-		t.Server.Debugf("[%v] Recived delete signal", t.Key)
+		t.Server.Debugf("[%v] Received delete signal", t.Key)
 		return
 	case <-time.After(Timer100Try):
 		t.Server.Debugf("[%v] Sent 100 Trying", t.Key)
@@ -666,7 +666,7 @@ func (t *ServerTransaction) inviteController() {
 		t.Server.Debugf("Ready to next response")
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case msg := <-t.TuChan:
 			if msg == nil {
@@ -714,7 +714,7 @@ func (t *ServerTransaction) nonInviteControllerProceeding() {
 	for {
 		select {
 		case <-t.DelChan:
-			t.Server.Debugf("[%v] Recived delete signal", t.Key)
+			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			return
 		case msg := <-t.TuChan:
 			if msg == nil {
@@ -752,7 +752,7 @@ func (t *ServerTransaction) nonInviteControllerCompleted() {
 		t.controllerTerminated()
 		return
 	case <-t.DelChan:
-		t.Server.Debugf("[%v] Recived delete signal", t.Key)
+		t.Server.Debugf("[%v] Received delete signal", t.Key)
 		return
 	}
 }
@@ -761,7 +761,7 @@ func (t *ServerTransaction) nonInviteController() {
 	t.State = TransactionStateTrying
 	select {
 	case <-t.DelChan:
-		t.Server.Debugf("[%v] Recived delete signal", t.Key)
+		t.Server.Debugf("[%v] Received delete signal", t.Key)
 		return
 	case msg := <-t.TuChan:
 		if msg == nil {
