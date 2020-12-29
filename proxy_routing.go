@@ -117,7 +117,7 @@ type Routes struct {
 
 var routes *Routes
 
-func loadRoutes(showDebugMsg bool) bool {
+func loadRoutes(filepath string, showDebugMsg bool) bool {
 	if routes == nil {
 		routes = new(Routes)
 		if routes == nil {
@@ -130,7 +130,7 @@ func loadRoutes(showDebugMsg bool) bool {
 			return false
 		}
 	}
-	fp, err := os.Open("routes.csv")
+	fp, err := os.Open(filepath)
 	if err != nil {
 		panic(err)
 	}

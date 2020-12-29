@@ -50,6 +50,10 @@ func main() {
 	if !ok {
 		logLevel = "INFO"
 	}
+	filepath, ok := os.LookupEnv("TRANSFILE")
+	if !ok {
+		filepath = "routes.csv"
+	}
 
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
@@ -66,7 +70,7 @@ func main() {
 
 	responseContexts = NewResponseCtxs()
 
-	if !loadRoutes(sip.LogLevel >= sip.LogDebug) {
+	if !loadRoutes(filepath, sip.LogLevel >= sip.LogDebug) {
 		return
 	}
 
