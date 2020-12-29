@@ -260,18 +260,20 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	return nil
 }
 
-func ackHandler(srv *sip.Server, msg *sip.Message) error {
-	srv.Debugf("Dialog was established\n")
-
-	// from := msg.From
+func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
+	var next string
 	fwdMsg := msg.Clone()
 	fwdMsg.MaxForwards.Decrement()
+	topmost := fwdMsg.Via.TopMost()
+	if topmost.SentBy != msg.RemoteAddr {
+		topmost.RawParameter = fmt.Sprintf("received=%s;", msg.RemoteAddr) + topmost.RawParameter
+	}
 
 	routes := fwdMsg.Header.Values("Route")
 	if len(routes) == 0 {
 		return nil
 	}
-	var next string
+
 	next = fwdMsg.RequestURI.Host
 	if len(routes) > 1 {
 		uri, err := sip.Parse(routes[1])
@@ -286,63 +288,20 @@ func ackHandler(srv *sip.Server, msg *sip.Message) error {
 	for _, route := range routes[1:] {
 		fwdMsg.Header.Add("Route", route)
 	}
+
+	return fwdMsg
+}
+
+func ackHandler(srv *sip.Server, msg *sip.Message) error {
+	srv.Debugf("Dialog was established\n")
+	fwdMsg := generateForwardingRequestByRouteHeader(msg)
 	srv.WriteMessage(fwdMsg)
 
 	return nil
 }
 
-func prackHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
-	rep := msg.GenerateResponseFromRequest()
-	rep.StatusCode = 200
-	txn.WriteMessage(rep)
-	return nil
-}
-
-func registerHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
-	return nil
-}
-
-func byeHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
-	srv.Debugf("Dialog was established\n")
-	var fromTag, toTag, callID string
-	if msg.From == nil || msg.CallID == nil || msg.To == nil {
-		// TODO:return sip.StatusBadRequest
-		return nil
-	}
-
-	from := msg.From
-	fromTag = from.Parameter().Get("tag")
-	to := msg.To
-	toTag = to.Parameter().Get("tag")
-	callID = msg.CallID.String()
-
-	if fromTag == "" || callID == "" || toTag == "" {
-		// TODO:return sip.StatusBadRequest
-		return nil
-	}
-
-	fwdMsg := msg.Clone()
-	fwdMsg.MaxForwards.Decrement()
-
-	routes := fwdMsg.Header.Values("Route")
-	if len(routes) == 0 {
-		return nil
-	}
-	var next string
-	next = fwdMsg.RequestURI.Host
-	if len(routes) > 1 {
-		uri, err := sip.Parse(routes[1])
-		if err != nil {
-			return nil
-		}
-		next = uri.Host
-	}
-
-	fwdMsg.RemoteAddr = next
-	fwdMsg.Header.Del("Route")
-	for _, route := range routes[1:] {
-		fwdMsg.Header.Add("Route", route)
-	}
+func nonInviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
+	fwdMsg := generateForwardingRequestByRouteHeader(msg)
 
 	clientTxn := sip.NewClientNonInviteTransaction(srv, fwdMsg, 10)
 	responseContexts.Add(*(txn.Key), *(clientTxn.Key))
@@ -355,7 +314,10 @@ func byeHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) e
 		return nil
 	}
 	clientTxn.WriteMessage(fwdMsg)
+	return nil
+}
 
+func registerHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
 	return nil
 }
 
@@ -365,17 +327,6 @@ func cancelHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	txn.WriteMessage(rep)
 	params := msg.Via.TopMost().Parameter()
 	params.Get("branch")
-	return nil
-}
-
-func optionsHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
-	rep := msg.GenerateResponseFromRequest()
-	rep.StatusCode = 200
-	txn.WriteMessage(rep)
-	return nil
-}
-
-func updateHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
 	return nil
 }
 
@@ -409,19 +360,16 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 	case sip.MethodINVITE:
 		srv.Debugf("Handle to INVITE\n")
 		return inviteHandler(srv, msg, txn)
-	case sip.MethodBYE:
+	case sip.MethodBYE,
+		sip.MethodOPTIONS,
+		sip.MethodUPDATE,
+		sip.MethodPRACK:
 		srv.Debugf("Handle to BYE\n")
-		return byeHandler(srv, msg, txn)
-	case sip.MethodPRACK:
-		return prackHandler(srv, msg, txn)
+		return nonInviteHandler(srv, msg, txn)
 	case sip.MethodREGISTER:
 		return registerHandler(srv, msg, txn)
 	case sip.MethodCANCEL:
 		return cancelHandler(srv, msg, txn)
-	case sip.MethodOPTIONS:
-		return optionsHandler(srv, msg, txn)
-	case sip.MethodUPDATE:
-		return updateHandler(srv, msg, txn)
 	case sip.MethodACK:
 		return ackHandler(srv, msg)
 	default:
