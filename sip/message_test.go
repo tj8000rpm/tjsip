@@ -204,6 +204,9 @@ func TestReadMessage(t *testing.T) {
 		t.Errorf("Invald contact Parameter")
 	}
 
+	if actual, expect := msg.Via.TopMost().SentBy, "10.0.0.1"; actual != expect {
+		t.Errorf("Not valid Topmost Via: expect %s, but given '%s'", expect, actual)
+	}
 }
 
 func TestMessageParseHeader(t *testing.T) {
@@ -236,11 +239,11 @@ func TestMessageParseHeader(t *testing.T) {
 		t.Errorf("Not valid Via length): expect %v, but given '%v'", expect, actual)
 	}
 	if actual, expect := msg.Via.Header[0].String(),
-		"SIP/2.0/UDP 192.168.0.2;branch=z9hG4bKbbbbbbb"; actual != expect {
+		"SIP/2.0/UDP 192.168.0.1;branch=z9hG4bKaaaaaaa"; actual != expect {
 		t.Errorf("Not valid Via[0] String(): expect %s, but given '%s'", expect, actual)
 	}
 	if actual, expect := msg.Via.Header[1].String(),
-		"SIP/2.0/UDP 192.168.0.1;branch=z9hG4bKaaaaaaa"; actual != expect {
+		"SIP/2.0/UDP 192.168.0.2;branch=z9hG4bKbbbbbbb"; actual != expect {
 		t.Errorf("Not valid Via[1] String(): expect %s, but given '%s'", expect, actual)
 	}
 	if actual, expect := msg.MaxForwards.String(), "70"; actual != expect {

@@ -249,7 +249,15 @@ func generateForwardingRequest(msg *sip.Message) *sip.Message {
 	fwdMsg.MaxForwards.Decrement()
 	topmost := fwdMsg.Via.TopMost()
 	if topmost.SentBy != msg.RemoteAddr {
-		topmost.RawParameter = fmt.Sprintf("received=%s;", msg.RemoteAddr) + topmost.RawParameter
+		param := topmost.Parameter()
+		param.Set("received", msg.RemoteAddr)
+		newParam := ""
+		for key, values := range param {
+			for _, value := range values {
+				newParam += fmt.Sprintf(";%s=%s", key, value)
+			}
+		}
+		topmost.RawParameter = newParam[1:]
 	}
 	return fwdMsg
 }

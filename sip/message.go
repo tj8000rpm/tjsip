@@ -634,8 +634,7 @@ func (msg *Message) parseHeader() {
 	// Via Header: It will have multiple contents
 	if vias := msg.Header.Values("via"); len(vias) > 0 {
 		msg.Via = NewViaHeaders()
-		for idx := len(vias) - 1; idx >= 0; idx-- {
-			v := vias[idx]
+		for _, v := range vias {
 			err := ParseVias(v, msg.Via)
 			if err != nil {
 				// TODO: Should I have any action?

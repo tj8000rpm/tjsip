@@ -537,6 +537,43 @@ func TestParseVias(t *testing.T) {
 	}
 }
 
+func TestParseVias2(t *testing.T) {
+	input1 := "SIP/2.0/UDP 192.168.100.51:5060;branch=z9hG4bKA1etJobG7DkqNAU9edsS"
+	input2 := "SIP/2.0/UDP example.com;received=192.168.100.10:5060;branch=z9hG4bK-20849-1-0"
+	v := NewViaHeaders()
+	err := ParseVias(input1, v)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+	err = ParseVias(input2, v)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+	if actual, expect := len(v.Header), 2; actual != expect {
+		t.Errorf("Not valid Via Header length: expect %v, but given '%v'", expect, actual)
+		return
+	}
+	if actual, expect := v.Header[1].SentBy, "192.168.100.51:5060"; actual != expect {
+		t.Errorf("Not valid Via Header[1] Sent By: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[1].RawParameter, "branch=z9hG4bKA1etJobG7DkqNAU9edsS"; actual != expect {
+		t.Errorf("Not valid Via Header[1] Raw Parameter: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[0].SentBy, "example.com"; actual != expect {
+		t.Errorf("Not valid Via Header[0] Sent By: expect %s, but given '%s'", expect, actual)
+	}
+	if actual, expect := v.Header[0].RawParameter, "received=192.168.100.10:5060;branch=z9hG4bK-20849-1-0"; actual != expect {
+		t.Errorf("Not valid Via Header[0] Raw Parameter: expect %s, but given '%s'", expect, actual)
+	}
+	expect := "Via: SIP/2.0/UDP 192.168.100.51:5060;branch=z9hG4bKA1etJobG7DkqNAU9edsS\r\nVia: SIP/2.0/UDP example.com;received=192.168.100.10:5060;branch=z9hG4bK-20849-1-0\r\n"
+	actual := v.WriteHeader()
+	if actual != expect {
+		t.Errorf("Invalid WriteHeader func\n expeect-----\n '%v', but given ----\n '%v'", expect, actual)
+	}
+}
+
 func TestParseViasMalformed(t *testing.T) {
 	input := ("SIP/2P123,123\";key2=value2, 127.0.0.1;key=value")
 	v := NewViaHeaders()
