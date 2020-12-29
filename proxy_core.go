@@ -272,13 +272,8 @@ func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 	}
 	var headOfRouteURI *sip.URI
 	if routes.Length() > 1 {
-		fmt.Printf("1 - %s\n", routes)
-		fmt.Printf("2 - %s\n", routes.Header)
-		fmt.Printf("3 - %s\n", routes.Header[1])
-		fmt.Printf("4 - %s\n", routes.Header[1].Addr)
-
 		headOfRouteURI := routes.Header[1].Addr.Uri
-		if headOfRouteURI != nil {
+		if headOfRouteURI == nil {
 			return nil
 		}
 		next = headOfRouteURI.Host
