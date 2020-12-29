@@ -75,5 +75,5 @@ func main() {
 	sip.HandleFunc(sip.LayerParserEgress, "module sip message manipulation", messageManipulationHandler)
 	sip.HandleFunc(sip.LayerCore, "module sip core(proxy)", proxyCoreHandler)
 	sip.HandleFunc(sip.LayerTransaction, "module sip core-transaction(proxy)", proxyCoreHandler)
-	sip.ListenAndServe("192.168.0.51:5060", nil)
+	sip.ListenAndServe("192.168.100.51:5060", nil)
 }
