@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sip/sip"
 	"strings"
+	"sync"
 )
 
 const (
@@ -14,21 +15,28 @@ const (
 
 type ResponseCtx = map[sip.ClientTransactionKey]bool
 type ResponseCtxs struct {
+	mu     sync.Mutex
 	stToCt map[sip.ServerTransactionKey]ResponseCtx
 	ctToSt map[sip.ClientTransactionKey]sip.ServerTransactionKey
 }
 
 func (ctxs *ResponseCtxs) GetStFromCt(ct sip.ClientTransactionKey) (sip.ServerTransactionKey, bool) {
+	ctxs.mu.Lock()
+	defer ctxs.mu.Unlock()
 	st, ok := ctxs.ctToSt[ct]
 	return st, ok
 }
 
 func (ctxs *ResponseCtxs) GetCtFromSt(st sip.ServerTransactionKey) (*ResponseCtx, bool) {
+	ctxs.mu.Lock()
+	defer ctxs.mu.Unlock()
 	cts, ok := ctxs.stToCt[st]
 	return &cts, ok
 }
 
 func (ctxs *ResponseCtxs) Add(st sip.ServerTransactionKey, ct sip.ClientTransactionKey) bool {
+	ctxs.mu.Lock()
+	defer ctxs.mu.Unlock()
 	_, ok := ctxs.stToCt[st]
 	if !ok {
 		ctxs.stToCt[st] = make(ResponseCtx)
@@ -42,6 +50,8 @@ func (ctxs *ResponseCtxs) Add(st sip.ServerTransactionKey, ct sip.ClientTransact
 }
 
 func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (complete, found bool) {
+	ctxs.mu.Lock()
+	defer ctxs.mu.Unlock()
 	st, ok := ctxs.ctToSt[ct]
 	if !ok {
 		return false, false

@@ -42,6 +42,11 @@ var callGap = callGapControl{enable: false, last: time.Now()}
 var responseContexts *ResponseCtxs
 
 func main() {
+	listenAddr, ok := os.LookupEnv("LISTEN")
+	if !ok {
+		listenAddr = ""
+	}
+
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
 	sip.LogLevel = sip.LogDebug
@@ -63,6 +68,7 @@ func main() {
 					continue
 				}
 				log.Printf("Call completed[%03d]: %v\n", idx, val)
+				log.Printf("Response Context Size st: %d / ct: %v\n", len(responseContexts.stToCt), len(responseContexts.ctToSt))
 			}
 			stat.mu.Unlock()
 		}
@@ -75,5 +81,5 @@ func main() {
 	sip.HandleFunc(sip.LayerParserEgress, "module sip message manipulation", messageManipulationHandler)
 	sip.HandleFunc(sip.LayerCore, "module sip core(proxy)", proxyCoreHandler)
 	sip.HandleFunc(sip.LayerTransaction, "module sip core-transaction(proxy)", proxyCoreHandler)
-	sip.ListenAndServe("192.168.100.51:5060", nil)
+	sip.ListenAndServe(listenAddr, nil)
 }
