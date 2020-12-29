@@ -743,3 +743,133 @@ func (c *ContactHeaders) Length() int {
 	}
 	return len(c.Header)
 }
+
+/********************************
+* Name addrs header
+********************************/
+type NameAddrFormat struct {
+	Addr         *NameAddr
+	RawParameter string
+}
+
+func (c *NameAddrFormat) Clone() (cp *NameAddrFormat) {
+	cp = new(NameAddrFormat)
+	if c.Addr != nil {
+		cp.Addr = c.Addr.Clone()
+	}
+	cp.RawParameter = c.RawParameter
+	return cp
+}
+
+func (c *NameAddrFormat) String() string {
+	if c.RawParameter == "" {
+		return c.Addr.String()
+	}
+	return c.Addr.String() + ";" + c.RawParameter
+}
+
+func (c *NameAddrFormat) Parameter() url.Values {
+	v, _ := url.ParseQuery(c.RawParameter)
+	return v
+}
+
+func newNameAddrFormatHeader(nameAddr *NameAddr, param string) *NameAddrFormat {
+	c := new(NameAddrFormat)
+	if c == nil {
+		return nil
+	}
+	c.Addr = nameAddr
+	c.RawParameter = strings.Trim(param, " \t\r\n;")
+	return c
+}
+
+func NewNameAddrFormatHeader(display string, uri *URI, param string) *NameAddrFormat {
+	return newNameAddrFormatHeader(NewNameAddr(display, uri), param)
+}
+
+func NewNameAddrFormatHeaderFromString(display, uristr, param string) *NameAddrFormat {
+	uri, err := Parse(uristr)
+	if err != nil {
+		return nil
+	}
+	return NewNameAddrFormatHeader(display, uri, param)
+}
+
+func ParseNameAddrFormats(s string, cons *NameAddrFormatHeaders) error {
+	if cons == nil {
+		return ErrHeaderParseError
+	}
+	if s == "" {
+		return nil
+	}
+	nameAddr, trail := ParseNameAddr(s)
+
+	res := strings.SplitN(trail, ",", 2)
+	rawParam := strings.Trim(res[0], " \t;")
+	if len(res) == 2 {
+		trail = strings.Trim(res[1], " \t")
+	} else {
+		trail = ""
+	}
+
+	c := newNameAddrFormatHeader(nameAddr, rawParam)
+	if cons.Add(c) {
+		return ParseNameAddrFormats(trail, cons)
+	}
+	return nil
+}
+
+func ParseNameAddrFormat(s string) *NameAddrFormat {
+	nameAddr, rawParam := ParseNameAddr(s)
+	rawParam = strings.Trim(rawParam, " ;")
+	return newNameAddrFormatHeader(nameAddr, rawParam)
+}
+
+type NameAddrFormatHeaders struct {
+	Header []*NameAddrFormat
+}
+
+func (c *NameAddrFormatHeaders) Clone() (cp *NameAddrFormatHeaders) {
+	cp = new(NameAddrFormatHeaders)
+	cp.Header = make([]*NameAddrFormat, len(c.Header))
+	for i := 0; i < len(c.Header); i++ {
+		if c.Header[i] != nil {
+			cp.Header[i] = c.Header[i].Clone()
+		}
+	}
+	return cp
+}
+
+func NewNameAddrFormatHeaders() *NameAddrFormatHeaders {
+	c := new(NameAddrFormatHeaders)
+	if c == nil {
+		return nil
+	}
+	c.Header = make([]*NameAddrFormat, 0)
+	return c
+}
+
+func (c *NameAddrFormatHeaders) Add(con *NameAddrFormat) bool {
+	before := len(c.Header)
+	c.Header = append(c.Header, con)
+	return before < len(c.Header)
+}
+
+func (c *NameAddrFormatHeaders) WriteHeader(full, compact string) string {
+	str := ""
+	key := full + ": "
+	if UseCompactForm {
+		key = compact + ": "
+	}
+	for i := 0; i < len(c.Header); i++ {
+		str += key + c.Header[i].String() + "\r\n"
+	}
+	return str
+}
+
+func (c *NameAddrFormatHeaders) Length() int {
+	if c.Header == nil {
+		return 0
+	}
+	return len(c.Header)
+}

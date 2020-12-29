@@ -70,7 +70,7 @@ func main() {
 
 	responseContexts = NewResponseCtxs()
 
-	if !loadRoutes(filepath, sip.LogLevel >= sip.LogDebug) {
+	if !loadTranslater(filepath, sip.LogLevel >= sip.LogDebug) {
 		return
 	}
 

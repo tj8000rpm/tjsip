@@ -110,22 +110,22 @@ func NewPrefixTrie(parent *PrefixTrie) (p *PrefixTrie) {
 	return p
 }
 
-type Routes struct {
+type Translater struct {
 	mu    sync.Mutex
 	table *PrefixTrie
 }
 
-var routes *Routes
+var translater *Translater
 
-func loadRoutes(filepath string, showDebugMsg bool) bool {
-	if routes == nil {
-		routes = new(Routes)
-		if routes == nil {
+func loadTranslater(filepath string, showDebugMsg bool) bool {
+	if translater == nil {
+		translater = new(Translater)
+		if translater == nil {
 			log.Printf("memory allocation fail\n")
 			return false
 		}
-		routes.table = NewPrefixTrie(nil)
-		if routes.table == nil {
+		translater.table = NewPrefixTrie(nil)
+		if translater.table == nil {
 			log.Printf("memory allocation fail\n")
 			return false
 		}
@@ -139,8 +139,8 @@ func loadRoutes(filepath string, showDebugMsg bool) bool {
 	reader := csv.NewReader(fp)
 	var line []string
 
-	routes.mu.Lock()
-	defer routes.mu.Unlock()
+	translater.mu.Lock()
+	defer translater.mu.Unlock()
 	for {
 		line, err = reader.Read()
 		if err != nil {
@@ -155,12 +155,12 @@ func loadRoutes(filepath string, showDebugMsg bool) bool {
 			log.Printf("memory allocation fail\n")
 			return false
 		}
-		routes.table.Add(line[0], fwd)
+		translater.table.Add(line[0], fwd)
 	}
 
 	if showDebugMsg {
 		log.Printf("load route \n")
-		routes.table.Dump()
+		translater.table.Dump()
 	}
 
 	return true

@@ -97,7 +97,7 @@ func lookupTrunkType(addr string) int {
 }
 
 func route(request string) (fwdAddr, fwdDomain string, found bool) {
-	rt := routes.table.Search(request)
+	rt := translater.table.Search(request)
 	if rt == nil {
 		return "", "", false
 	}
@@ -178,8 +178,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	_ = from
 
 	var fwdMsg *sip.Message
-	routes := msg.Header.Values("Route")
-	if len(routes) != 0 {
+	if len(msg.Header.Values("Route")) != 0 {
 		// this message will re-invite
 		fwdMsg = generateForwardingRequestByRouteHeader(msg)
 	} else {
@@ -267,11 +266,14 @@ func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 
 	fwdMsg := generateForwardingRequest(msg)
 	next := fwdMsg.RequestURI.Host
-	routes := fwdMsg.Header.Values("Route")
+	routes := sip.NewNameAddrFormatHeaders()
+	for _, route := range fwdMsg.Header.Values("Route") {
+		sip.ParseNameAddrFormats(route, routes)
+	}
 	var headOfRouteURI *sip.URI
-	if len(routes) > 1 {
-		headOfRouteURI, err := sip.Parse(routes[1])
-		if err != nil {
+	if routes.Length() > 1 {
+		headOfRouteURI := routes.Header[1].Addr.Uri
+		if headOfRouteURI != nil {
 			return nil
 		}
 		next = headOfRouteURI.Host
@@ -287,8 +289,8 @@ func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 	}
 
 	fwdMsg.Header.Del("Route")
-	for i := routeOffset; i < len(routes); i++ {
-		fwdMsg.Header.Add("Route", routes[i])
+	for i := routeOffset; i < routes.Length(); i++ {
+		fwdMsg.Header.Add("Route", routes.Header[i].String())
 	}
 	if headOfRouteURI != nil && !nextIsLR {
 		// In case of strict routing
