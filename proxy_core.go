@@ -161,7 +161,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 
 	fwdMsg := msg.Clone()
 	routes := fwdMsg.Header.Values("Route")
-	if len(routes) == 0 {
+	if len(routes) != 0 {
 		// this message will ini-invite
 		fwdMsg.RemoteAddr = lookupRemoteAddr(routes[0])
 		fwdMsg.Header.Del("Route")
