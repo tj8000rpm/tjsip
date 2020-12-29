@@ -290,6 +290,7 @@ func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 		// In case of strict routing
 		fwdMsg.Header.Add("Route", fwdMsg.RequestURI.String())
 		fwdMsg.RequestURI = headOfRrouteURI
+		fmt.Printf("%v\n", fwdMsg.RequestURI)
 	}
 
 	return fwdMsg
