@@ -178,7 +178,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	topmost := fwdMsg.Via.TopMost()
 	//if topmost.SentBy != msg.RemoteAddr {
 	if true {
-		topmost.RawParam = fmt.Sprintf("recieved=%s;", msg.RemoteAddr) + topmost.RawParam
+		topmost.RawParameter = fmt.Sprintf("recieved=%s;", msg.RemoteAddr) + topmost.RawParameter
 	}
 	routes := fwdMsg.Header.Values("Route")
 	if len(routes) != 0 {
