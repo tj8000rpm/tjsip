@@ -277,16 +277,17 @@ func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 
 	fwdMsg.RemoteAddr = resolveDomain(next)
 	fwdMsg.Header.Del("Route")
+
+	routeOffset := 2
 	if nextIsLR {
-		// In case of loose routing
-		for _, route := range routes[1:] {
-			fwdMsg.Header.Add("Route", route)
-		}
-	} else {
+		routeOffset = 1
+	}
+
+	for i := routeOffset; i < len(routes); i++ {
+		fwdMsg.Header.Add("Route", routes[i])
+	}
+	if !nextIsLR {
 		// In case of strict routing
-		for _, route := range routes[2:] {
-			fwdMsg.Header.Add("Route", route)
-		}
 		fwdMsg.Header.Add("Route", fwdMsg.RequestURI.String())
 		fwdMsg.RequestURI = headOfRrouteURI
 	}
