@@ -158,9 +158,9 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 		return nil
 	}
 	if recieved := topMostVia.Parameter().Get("received"); received != "" {
-		cpMsg.RemoteAddr = received
-	} else {
-		cpMsg.RemoteAddr = topMostVia.SentBy
+	cpMsg.RemoteAddr = received
+	} else{
+	cpMsg.RemoteAddr = topMostVia.SentBy
 	}
 	srvTxn.WriteMessage(cpMsg)
 
