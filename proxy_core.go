@@ -141,7 +141,12 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 		return nil
 	}
 	srv.Debugf("Message was copied")
-	topMostVia := cpMsg.Via.Pop()
+	cpMsg.Via.Pop()
+	topMostVia := cpMsg.Via.TopMost()
+	if topMostVia == nil {
+		// Message not forwarded
+		return nil
+	}
 	cpMsg.RemoteAddr = topMostVia.SentBy
 	srvTxn.WriteMessage(cpMsg)
 
