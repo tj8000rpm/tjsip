@@ -604,13 +604,17 @@ func readMessage(msg *Message, b *bufio.Reader) (err error) {
 	msg.Header = http.Header(mimeHeader)
 
 	msg.parseHeader()
+
 	msg.Body = make([]byte, 4096)
 	len, err := b.Read(msg.Body)
 	if err != nil {
-		return err
+		// ignore body
+		len = 0
+		msg.Body = nil
+	} else {
+		msg.Body = msg.Body[:len]
 	}
 	msg.ContentLength = int64(len)
-	msg.Body = msg.Body[:len]
 
 	return nil
 }
