@@ -197,7 +197,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 
 		// Insert Record route header
 		recordRoutes := fwdMsg.Header.Values("Record-Route")
-		newRR := fmt.Sprintf("<sip:%s;lr>", srv.Host)
+		newRR := fmt.Sprintf("<sip:%s;lr>", srv.Addr)
 		fwdMsg.Header.Set("Record-Route", newRR)
 		for _, rr := range recordRoutes {
 			fwdMsg.Header.Add("Record-Route", rr)
