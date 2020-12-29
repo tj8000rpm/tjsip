@@ -312,3 +312,16 @@ func TestUriRequestURI(t *testing.T) {
 		t.Errorf("Invalid uri RequestURI(), expect: %v, but actual %v", exp, act)
 	}
 }
+
+func TestUriParameterNoValue(t *testing.T) {
+	uri := URI{RawParameter: "lr;sr"}
+	actual := uri.Parameter()
+
+	if _, ok := actual["lr"]; !ok {
+		t.Errorf("Invalid uri Parameter()")
+	}
+
+	if _, ok := actual["rr"]; ok {
+		t.Errorf("Invalid uri Parameter()")
+	}
+}

@@ -177,29 +177,15 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	}
 	_ = from
 
-	fwdMsg := msg.Clone()
-	topmost := fwdMsg.Via.TopMost()
-	if topmost.SentBy != msg.RemoteAddr {
-		topmost.RawParameter = fmt.Sprintf("received=%s;", msg.RemoteAddr) + topmost.RawParameter
-	}
-	routes := fwdMsg.Header.Values("Route")
+	var fwdMsg *sip.Message
+	routes := msg.Header.Values("Route")
 	if len(routes) != 0 {
-		// this message will ini-invite
-		var next string
-		next = fwdMsg.RequestURI.Host
-		if len(routes) > 1 {
-			uri, err := sip.Parse(routes[1])
-			if err != nil {
-				return nil
-			}
-			next = uri.Host
-		}
-		fwdMsg.RemoteAddr = resolveDomain(next)
-		fwdMsg.Header.Del("Route")
-		for _, route := range routes[1:] {
-			fwdMsg.Header.Add("Route", route)
-		}
+		// this message will re-invite
+		fwdMsg = generateForwardingRequestByRouteHeader(msg)
 	} else {
+		// this message will ini-invite
+		fwdMsg = generateForwardingRequest(msg)
+
 		// Routing
 		requestUri := msg.RequestURI
 		if requestUri.Scheme != "sip" && requestUri.Scheme != "tel" {
@@ -235,7 +221,6 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 		}
 	}
 
-	fwdMsg.MaxForwards.Decrement()
 	clientTxn := sip.NewClientInviteTransaction(srv, fwdMsg, 10)
 
 	// Add a new response context
@@ -260,33 +245,50 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	return nil
 }
 
-func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
-	var next string
+func generateForwardingRequest(msg *sip.Message) *sip.Message {
 	fwdMsg := msg.Clone()
 	fwdMsg.MaxForwards.Decrement()
 	topmost := fwdMsg.Via.TopMost()
 	if topmost.SentBy != msg.RemoteAddr {
 		topmost.RawParameter = fmt.Sprintf("received=%s;", msg.RemoteAddr) + topmost.RawParameter
 	}
+	return fwdMsg
+}
 
-	routes := fwdMsg.Header.Values("Route")
+func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
+	nextIsLR := false
+	routes := msg.Header.Values("Route")
 	if len(routes) == 0 {
 		return nil
 	}
 
-	next = fwdMsg.RequestURI.Host
+	fwdMsg := generateForwardingRequest(msg)
+	next := fwdMsg.RequestURI.Host
+	var headOfRrouteURI *sip.URI
 	if len(routes) > 1 {
-		uri, err := sip.Parse(routes[1])
+		headOfRrouteURI, err := sip.Parse(routes[1])
 		if err != nil {
 			return nil
 		}
-		next = uri.Host
+		next = headOfRrouteURI.Host
+		// check a `lr` flag in top of route header
+		_, nextIsLR = headOfRrouteURI.Parameter()["lr"]
 	}
 
 	fwdMsg.RemoteAddr = resolveDomain(next)
 	fwdMsg.Header.Del("Route")
-	for _, route := range routes[1:] {
-		fwdMsg.Header.Add("Route", route)
+	if nextIsLR {
+		// In case of loose routing
+		for _, route := range routes[1:] {
+			fwdMsg.Header.Add("Route", route)
+		}
+	} else {
+		// In case of strict routing
+		for _, route := range routes[2:] {
+			fwdMsg.Header.Add("Route", route)
+		}
+		fwdMsg.Header.Add("Route", fwdMsg.RequestURI.String())
+		fwdMsg.RequestURI = headOfRrouteURI
 	}
 
 	return fwdMsg
