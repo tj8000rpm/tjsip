@@ -46,11 +46,23 @@ func main() {
 	if !ok {
 		listenAddr = ""
 	}
+	logLevel, ok := os.LookupEnv("LOGLEVEL")
+	if !ok {
+		logLevel = "INFO"
+	}
 
 	sip.RecieveBufSizeB = 9000
 	log.SetOutput(os.Stdout)
-	sip.LogLevel = sip.LogDebug
-	//sip.LogLevel = sip.LogInfo
+	switch logLevel {
+	case "INFO":
+		sip.LogLevel = sip.LogInfo
+		break
+	case "DEBUG":
+		sip.LogLevel = sip.LogDebug
+		break
+	default:
+		sip.LogLevel = sip.LogInfo
+	}
 
 	responseContexts = NewResponseCtxs()
 

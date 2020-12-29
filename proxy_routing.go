@@ -144,7 +144,6 @@ func loadRoutes(showDebugMsg bool) bool {
 	for {
 		line, err = reader.Read()
 		if err != nil {
-			log.Printf("CSV open error\n")
 			break
 		}
 		if len(line) != 3 {
