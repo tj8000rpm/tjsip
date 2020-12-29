@@ -166,10 +166,3 @@ func loadRoutes(showDebugMsg bool) bool {
 
 	return true
 }
-
-func lookupRemoteAddr(uri_str string) string {
-	// Retrun IPaddress/Port
-	// Like "192.168.0.128:5060"
-
-	return "192.168.0.128:5060"
-}

@@ -63,12 +63,13 @@ func main() {
 			time.Sleep(time.Second * 5)
 			stat.mu.Lock()
 			log.Printf("Call completed: %v\n", stat.completed)
+
+			log.Printf("Response Context Size st: %d / ct: %v\n", len(responseContexts.stToCt), len(responseContexts.ctToSt))
 			for idx, val := range stat.completedPerResponse {
 				if val == 0 {
 					continue
 				}
 				log.Printf("Call completed[%03d]: %v\n", idx, val)
-				log.Printf("Response Context Size st: %d / ct: %v\n", len(responseContexts.stToCt), len(responseContexts.ctToSt))
 			}
 			stat.mu.Unlock()
 		}

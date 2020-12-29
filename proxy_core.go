@@ -178,7 +178,16 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	routes := fwdMsg.Header.Values("Route")
 	if len(routes) != 0 {
 		// this message will ini-invite
-		fwdMsg.RemoteAddr = lookupRemoteAddr(routes[0])
+		var next string
+		next = fwdMsg.RequestURI.Host
+		if len(routes) > 1 {
+			uri, err := sip.Parse(routes[1])
+			if err != nil {
+				return nil
+			}
+			next = uri.Host
+		}
+		fwdMsg.RemoteAddr = next
 		fwdMsg.Header.Del("Route")
 		for _, route := range routes[1:] {
 			fwdMsg.Header.Add("Route", route)
@@ -255,7 +264,17 @@ func ackHandler(srv *sip.Server, msg *sip.Message) error {
 	if len(routes) == 0 {
 		return nil
 	}
-	fwdMsg.RemoteAddr = lookupRemoteAddr(routes[0])
+	var next string
+	next = fwdMsg.RequestURI.Host
+	if len(routes) > 1 {
+		uri, err := sip.Parse(routes[1])
+		if err != nil {
+			return nil
+		}
+		next = uri.Host
+	}
+
+	fwdMsg.RemoteAddr = next
 	fwdMsg.Header.Del("Route")
 	for _, route := range routes[1:] {
 		fwdMsg.Header.Add("Route", route)
@@ -302,7 +321,17 @@ func byeHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) e
 	if len(routes) == 0 {
 		return nil
 	}
-	fwdMsg.RemoteAddr = lookupRemoteAddr(routes[0])
+	var next string
+	next = fwdMsg.RequestURI.Host
+	if len(routes) > 1 {
+		uri, err := sip.Parse(routes[1])
+		if err != nil {
+			return nil
+		}
+		next = uri.Host
+	}
+
+	fwdMsg.RemoteAddr = next
 	fwdMsg.Header.Del("Route")
 	for _, route := range routes[1:] {
 		fwdMsg.Header.Add("Route", route)
