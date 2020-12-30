@@ -29,6 +29,18 @@
   <recv request="INVITE" crlf="true">
   </recv>
 
+  <nop hide="true">
+    <action>
+      <assignstr assign_to="orig_via" value="[last_Via:]" />
+      <assignstr assign_to="orig_rr" value="[last_Record-Route:]" />
+      <assignstr assign_to="orig_to" value="[last_To:]" />
+      <assignstr assign_to="orig_from" value="[last_From:]" />
+      <assignstr assign_to="orig_cseq" value="[last_CSeq:]" />
+    </action>
+  </nop>
+
+
+
   <!-- The '[last_*]' keyword is replaced automatically by the          -->
   <!-- specified header if it was present in the last message received  -->
   <!-- (except if it was a retransmission). If the header was not       -->
@@ -56,9 +68,9 @@
     ]]>
   </send>
   
-  <pause milliseconds="3000"/>
+  <recv request="CANCEL"> </recv>
 
-  <send retrans="500">
+  <send>
     <![CDATA[
 
       SIP/2.0 200 OK
@@ -69,43 +81,30 @@
       [last_CSeq:]
       [last_Record-Route:]
       Contact: <sip:[local_ip]:[local_port];transport=[transport]>
-      Content-Type: application/sdp
-      Content-Length: [len]
-
-      v=0
-      o=user1 53655765 2353687637 IN IP[local_ip_type] [local_ip]
-      s=-
-      c=IN IP[media_ip_type] [media_ip]
-      t=0 0
-      m=audio [media_port] RTP/AVP 0
-      a=rtpmap:0 PCMU/8000
 
     ]]>
   </send>
 
+  <send retrans="500">
+    <![CDATA[
+
+      SIP/2.0 487 Request Terminated
+      [$orig_via]
+      [$orig_rr]
+      [$orig_from]
+      [$orig_to];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [$orig_cseq]
+      Contact: <sip:[local_ip]:[local_port];transport=[transport]>
+
+    ]]>
+  </send>
+
+
   <recv request="ACK"
-        optional="true"
         rtd="true"
         crlf="true">
   </recv>
-
-  <recv request="BYE">
-  </recv>
-
-  <send>
-    <![CDATA[
-
-      SIP/2.0 200 OK
-      [last_Via:]
-      [last_From:]
-      [last_To:]
-      [last_Call-ID:]
-      [last_CSeq:]
-      Contact: <sip:[local_ip]:[local_port];transport=[transport]>
-      Content-Length: 0
-
-    ]]>
-  </send>
 
   <!-- Keep the call open for a while in case the 200 is lost to be     -->
   <!-- able to retransmit it if we receive the BYE again.               -->

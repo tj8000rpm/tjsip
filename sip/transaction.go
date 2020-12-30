@@ -36,6 +36,7 @@ var (
 	ErrTransactionDuplicated        = &ProtocolError{"transaction duplicated"}
 	ErrTransactionUnexpectedMessage = &ProtocolError{"transaction receive unexpected message"}
 	ErrTransactionTransportError    = &ProtocolError{"transport error"}
+	ErrTransactionTimedOut          = &ProtocolError{"transaction timed out"}
 	ErrTransactionClosed            = &ProtocolError{"transaction was closed"}
 )
 
@@ -95,10 +96,13 @@ type ClientTransactionKey struct {
 }
 type ClientTransaction struct {
 	BaseTransaction
-	Key     *ClientTransactionKey
-	request *Message
-	ack     *Message
-	resChan chan *Message
+	Key             *ClientTransactionKey
+	Request         *Message
+	ack             *Message
+	ProvisionalRes  *Message
+	FinalRes        *Message
+	resChan         chan *Message
+	ErrorInformFunc func(*ClientTransaction)
 }
 
 func (t *ClientTransaction) Destroy() {
@@ -108,6 +112,9 @@ func (t *ClientTransaction) Destroy() {
 	t.resChan = nil
 	t.Mu.Unlock()
 	t.DestroyChanel()
+	if t.Err != nil && t.ErrorInformFunc != nil {
+		t.ErrorInformFunc(t)
+	}
 }
 
 func (t *ClientTransaction) Handle(res *Message) {
@@ -199,7 +206,7 @@ func (t *ClientTransaction) nonInviteControllerProceeding() {
 		case <-time.After(timerE):
 			// retransmit request
 			t.Server.Debugf("[%v] Timer E(%v) fire", t.Key, timerE)
-			t.Server.WriteMessage(t.request)
+			t.Server.WriteMessage(t.Request)
 			timerF -= timerE
 			timerE *= 2
 			if timerE > T2 {
@@ -208,6 +215,7 @@ func (t *ClientTransaction) nonInviteControllerProceeding() {
 			continue
 		case <-time.After(timerF):
 			t.Server.Debugf("[%v] Timer F fire", t.Key)
+			t.Err = ErrTransactionTimedOut
 			t.controllerTerminated()
 			return
 		case msg := <-t.resChan:
@@ -222,9 +230,11 @@ func (t *ClientTransaction) nonInviteControllerProceeding() {
 
 			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
 				if msg.StatusCode >= 200 && msg.StatusCode < 700 {
+					t.FinalRes = msg
 					t.nonInviteControllerCompleted()
 					return
 				} else {
+					t.ProvisionalRes = msg
 					t.nonInviteControllerProceeding()
 					return
 				}
@@ -242,22 +252,30 @@ func (t *ClientTransaction) inviteControllerProceeding() {
 			return
 		case msg := <-t.resChan:
 			if msg == nil {
+				t.Err = ErrTransactionUnexpectedMessage
+				t.Destroy()
 				return
 			}
 			t.Server.Debugf("[%v] Response from TU", t.Key)
 			if !msg.Response {
+				t.Err = ErrTransactionUnexpectedMessage
 				t.Destroy()
 				return
 			}
 			if msg.StatusCode >= 100 && msg.StatusCode < 200 {
+				t.ProvisionalRes = msg
 				continue
 			} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
+				t.FinalRes = msg
 				t.controllerTerminated()
 				return
 			} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
-				ack, err := GenerateAckFromRequestAndResponse(t.request, msg)
+				t.FinalRes = msg
+				ack, err := GenerateAckFromRequestAndResponse(t.Request, msg)
 				if err != nil {
 					t.Server.Debugf("Unable to generate ACK Request / %v", err)
+					t.Err = err
+					t.Destroy()
 					return
 				}
 				t.Mu.Lock()
@@ -286,7 +304,7 @@ func (t *ClientTransaction) inviteController() {
 		// transmit Initial first INVITE message
 		t.Server.Debugf("[%v] Transmit INVITE request from TU", t.Key)
 		t.Mu.Lock()
-		t.request = msg
+		t.Request = msg
 		t.Mu.Unlock()
 		t.Server.WriteMessage(msg)
 	}
@@ -299,16 +317,19 @@ func (t *ClientTransaction) inviteController() {
 		select {
 		case <-t.DelChan:
 			t.Server.Debugf("[%v] Received delete signal", t.Key)
+			t.Err = ErrTransactionClosed
+			t.Destroy()
 			return
 		case <-time.After(timerA):
 			// retransmit final response
 			t.Server.Debugf("[%v] Timer A(%v) fire", t.Key, timerA)
-			t.Server.WriteMessage(t.request)
+			t.Server.WriteMessage(t.Request)
 			timerB -= timerA
 			timerA *= 2
 			continue
 		case <-time.After(timerB):
 			t.Server.Debugf("[%v] Timer B fire", t.Key)
+			t.Err = ErrTransactionTimedOut
 			t.controllerTerminated()
 			return
 		case msg := <-t.resChan:
@@ -317,18 +338,23 @@ func (t *ClientTransaction) inviteController() {
 			}
 			t.Server.Debugf("[%v] Response from TU", t.Key)
 			if !msg.Response {
+				t.Err = ErrTransactionUnexpectedMessage
 				t.Destroy()
 				return
 			}
 
 			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
 				if msg.StatusCode >= 200 && msg.StatusCode < 300 {
+					t.FinalRes = msg
 					t.controllerTerminated()
 					return
 				} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
-					ack, err := GenerateAckFromRequestAndResponse(t.request, msg)
+					t.FinalRes = msg
+					ack, err := GenerateAckFromRequestAndResponse(t.Request, msg)
 					if err != nil {
 						t.Server.Debugf("Unable to generate ACK Request / %v", err)
+						t.Err = err
+						t.Destroy()
 						return
 					}
 					t.Mu.Lock()
@@ -336,6 +362,7 @@ func (t *ClientTransaction) inviteController() {
 					t.Mu.Unlock()
 					t.inviteControllerCompleted()
 				} else {
+					t.ProvisionalRes = msg
 					t.inviteControllerProceeding()
 					return
 				}
@@ -360,55 +387,13 @@ func (t *ClientTransaction) nonInviteController() {
 		// transmit Request message
 		t.Server.Debugf("[%v] Transmit request from TU", t.Key)
 		t.Mu.Lock()
-		t.request = msg
+		t.Request = msg
 		t.Mu.Unlock()
 		t.Server.WriteMessage(msg)
 	}
 
-	timerE := TimerE
-	timerF := TimerF
-	// Enter Trying State
-	for {
-		t.Server.Debugf("Ready to response")
-		select {
-		case <-t.DelChan:
-			t.Server.Debugf("[%v] Received delete signal", t.Key)
-			return
-		case <-time.After(timerE):
-			// retransmit request
-			t.Server.Debugf("[%v] Timer E(%v) fire", t.Key, timerE)
-			t.Server.WriteMessage(t.request)
-			timerF -= timerE
-			timerE *= 2
-			if timerE > T2 {
-				timerE = T2
-			}
-			continue
-		case <-time.After(timerF):
-			t.Server.Debugf("[%v] Timer F fire", t.Key)
-			t.controllerTerminated()
-			return
-		case msg := <-t.resChan:
-			if msg == nil {
-				return
-			}
-			t.Server.Debugf("[%v] Response from TU", t.Key)
-			if !msg.Response {
-				t.Destroy()
-				return
-			}
-
-			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
-				if msg.StatusCode >= 200 && msg.StatusCode < 700 {
-					t.nonInviteControllerCompleted()
-					return
-				} else {
-					t.nonInviteControllerProceeding()
-					return
-				}
-			}
-		}
-	}
+	t.nonInviteControllerProceeding()
+	return
 }
 
 func (t *ClientTransaction) Controller() {
@@ -419,8 +404,7 @@ func (t *ClientTransaction) Controller() {
 	}
 }
 
-func NewClientInviteTransaction(srv *Server, msg *Message, chanSize int) *ClientTransaction {
-	respChan := make(chan *Message, chanSize)
+func NewClientInviteTransaction(srv *Server, msg *Message, f func(*ClientTransaction)) *ClientTransaction {
 	if msg.Via == nil {
 		msg.Via = NewViaHeaders()
 	}
@@ -431,11 +415,10 @@ func NewClientInviteTransaction(srv *Server, msg *Message, chanSize int) *Client
 	if err != nil {
 		return nil
 	}
-	return newClientTransaction(srv, true, key, msg, respChan)
+	return newClientTransaction(srv, true, key, msg, f)
 }
 
-func NewClientNonInviteTransaction(srv *Server, msg *Message, chanSize int) *ClientTransaction {
-	respChan := make(chan *Message, chanSize)
+func NewClientNonInviteTransaction(srv *Server, msg *Message, f func(*ClientTransaction)) *ClientTransaction {
 	if msg.Via == nil {
 		msg.Via = NewViaHeaders()
 	}
@@ -446,10 +429,10 @@ func NewClientNonInviteTransaction(srv *Server, msg *Message, chanSize int) *Cli
 	if err != nil {
 		return nil
 	}
-	return newClientTransaction(srv, false, key, msg, respChan)
+	return newClientTransaction(srv, false, key, msg, f)
 }
 
-func newClientTransaction(srv *Server, isInvite bool, key *ClientTransactionKey, msg *Message, respChan chan *Message) *ClientTransaction {
+func newClientTransaction(srv *Server, isInvite bool, key *ClientTransactionKey, msg *Message, f func(*ClientTransaction)) *ClientTransaction {
 	trans := new(ClientTransaction)
 	trans.State = TransactionStateInit
 	trans.Invite = isInvite
@@ -458,8 +441,9 @@ func newClientTransaction(srv *Server, isInvite bool, key *ClientTransactionKey,
 	trans.Err = nil
 	trans.DelChan = make(chan bool)
 	trans.Key = key
-	trans.request = msg
+	trans.Request = msg
 	trans.resChan = make(chan *Message)
+	trans.ErrorInformFunc = f
 	go trans.Controller()
 	return trans
 }
@@ -516,9 +500,9 @@ type ServerTransactionKey struct {
 type ServerTransaction struct {
 	BaseTransaction
 	Key            *ServerTransactionKey
-	request        *Message
-	provisionalRes *Message
-	finalRes       *Message
+	Request        *Message
+	ProvisionalRes *Message
+	FinalRes       *Message
 }
 
 func (t *ServerTransaction) Destroy() {
@@ -534,13 +518,13 @@ func (t *ServerTransaction) Handle(req *Message) {
 		t.TuChan <- req
 		return
 	}
-	if t.finalRes != nil {
+	if t.FinalRes != nil {
 		t.Server.Debugf("[%v] retransmit final response", t.Key)
 		//t.Server.Infof("%v vs %v", msg.RemoteAddr, query)
-		t.WriteMessage(t.finalRes)
-	} else if t.provisionalRes != nil {
+		t.WriteMessage(t.FinalRes)
+	} else if t.ProvisionalRes != nil {
 		t.Server.Debugf("[%v] retransmit provisional response", t.Key)
-		t.WriteMessage(t.provisionalRes)
+		t.WriteMessage(t.ProvisionalRes)
 	}
 	t.Server.Infof("[%v] retrans but call be processing", t.Key)
 	//t.Server.Infof("retrans Transation: \n%v", *t)
@@ -587,7 +571,7 @@ func (t *ServerTransaction) inviteControllerCompleted() {
 		case <-time.After(timerG):
 			// retransmit final response
 			t.Server.Debugf("[%v] Timer G(%v) fire", t.Key, timerG)
-			t.Server.WriteMessage(t.finalRes)
+			t.Server.WriteMessage(t.FinalRes)
 			timerH -= timerG
 			timerG *= 2
 			if timerG > T2 {
@@ -618,9 +602,9 @@ func (t *ServerTransaction) inviteController() {
 		return
 	case <-time.After(Timer100Try):
 		t.Server.Debugf("[%v] Sent 100 Trying", t.Key)
-		provRes := t.request.GenerateResponseFromRequest()
+		provRes := t.Request.GenerateResponseFromRequest()
 		t.Mu.Lock()
-		t.provisionalRes = provRes
+		t.ProvisionalRes = provRes
 		t.Mu.Unlock()
 		t.Server.WriteMessage(provRes)
 	case msg := <-t.TuChan:
@@ -636,14 +620,14 @@ func (t *ServerTransaction) inviteController() {
 			// transmit response state will conitunue
 			t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
 			t.Mu.Lock()
-			t.provisionalRes = msg
+			t.ProvisionalRes = msg
 			t.Mu.Unlock()
 			t.Server.WriteMessage(msg)
 		} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
 			// transmit response and state to Terminated
 			t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
 			t.Mu.Lock()
-			t.finalRes = msg
+			t.FinalRes = msg
 			t.Mu.Unlock()
 			t.Server.WriteMessage(msg)
 			t.controllerTerminated()
@@ -651,7 +635,7 @@ func (t *ServerTransaction) inviteController() {
 		} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
 			t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
 			t.Mu.Lock()
-			t.finalRes = msg
+			t.FinalRes = msg
 			t.Mu.Unlock()
 			t.Server.WriteMessage(msg)
 			t.inviteControllerCompleted()
@@ -681,14 +665,14 @@ func (t *ServerTransaction) inviteController() {
 				// transmit response state will conitunue
 				t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
 				t.Mu.Lock()
-				t.provisionalRes = msg
+				t.ProvisionalRes = msg
 				t.Mu.Unlock()
 				t.Server.WriteMessage(msg)
 			} else if msg.StatusCode >= 200 && msg.StatusCode < 300 {
 				// transmit response and state to Terminated
 				t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
 				t.Mu.Lock()
-				t.finalRes = msg
+				t.FinalRes = msg
 				t.Mu.Unlock()
 				t.Server.WriteMessage(msg)
 				t.controllerTerminated()
@@ -696,7 +680,7 @@ func (t *ServerTransaction) inviteController() {
 			} else if msg.StatusCode >= 300 && msg.StatusCode <= 600 {
 				t.Server.Debugf("[%v] Transmit final response(NOT 2xx) from TU", t.Key)
 				t.Mu.Lock()
-				t.finalRes = msg
+				t.FinalRes = msg
 				t.Mu.Unlock()
 				t.Server.WriteMessage(msg)
 				t.inviteControllerCompleted()
@@ -729,12 +713,12 @@ func (t *ServerTransaction) nonInviteControllerProceeding() {
 			if msg.StatusCode > 100 && msg.StatusCode < 200 {
 				// transmit response state will conitunue
 				t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
-				t.provisionalRes = msg
+				t.ProvisionalRes = msg
 				continue
 			} else if msg.StatusCode >= 200 && msg.StatusCode < 700 {
 				// transmit response and state to Terminated
 				t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
-				t.finalRes = msg
+				t.FinalRes = msg
 				t.nonInviteControllerCompleted()
 				return
 			}
@@ -776,12 +760,12 @@ func (t *ServerTransaction) nonInviteController() {
 		if msg.StatusCode > 100 && msg.StatusCode < 200 {
 			// transmit response state will conitunue
 			t.Server.Debugf("[%v] Transmit provisional response from TU", t.Key)
-			t.provisionalRes = msg
+			t.ProvisionalRes = msg
 			t.nonInviteControllerProceeding()
 		} else if msg.StatusCode >= 200 && msg.StatusCode < 700 {
 			// transmit response and state to Terminated
 			t.Server.Debugf("[%v] Transmit final response from TU", t.Key)
-			t.finalRes = msg
+			t.FinalRes = msg
 			t.nonInviteControllerCompleted()
 			return
 		}
@@ -816,7 +800,7 @@ func newServerTransaction(srv *Server, isInvite bool, key *ServerTransactionKey,
 	trans.Err = nil
 	trans.DelChan = make(chan bool)
 	trans.Key = key
-	trans.request = msg
+	trans.Request = msg
 	go trans.Controller()
 	return trans
 }

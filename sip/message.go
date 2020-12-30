@@ -87,6 +87,8 @@ func (msg *Message) Clone() (cpMsg *Message) {
 	if cpMsg == nil {
 		return nil
 	}
+	cpMsg.RemoteAddr = msg.RemoteAddr
+
 	cpMsg.Response = msg.Response
 	cpMsg.StatusCode = msg.StatusCode
 	cpMsg.ReasonPhrase = msg.ReasonPhrase
@@ -717,7 +719,7 @@ func (msg *Message) AddToTag() (err error) {
 		return nil
 	}
 	newParam := "tag=" + GenerateTag() + ";" + msg.To.RawParameter
-	msg.To.RawParameter = newParam
+	msg.To.RawParameter = strings.Trim(newParam, ";")
 	return nil
 }
 
@@ -760,6 +762,57 @@ func (r *Message) outgoingLength() int64 {
 		return r.ContentLength
 	}
 	return -1
+}
+
+func GenerateCancelRequest(req *Message) (cancel *Message, err error) {
+	// RFC3261 P.52
+	// A CANCEL request SHOULD NOT be sent to cancel a request other than
+	// INVITE.
+	if req == nil || !req.Request || req.Method != "INVITE" {
+		return nil, ErrMalformedMessage
+	}
+	cancel = req.Clone()
+	// CreateCACNEL(req.RemoteAddr)
+
+	cancel.Method = "CANCEL"
+
+	if cancel == nil {
+		return nil, ErrMalformedMessage
+	}
+
+	// RFC3261 P.53
+	// The following procedures are used to construct a CANCEL request.  The
+	// Request-URI, Call-ID, To, the numeric part of CSeq, and From header
+	// fields in the CANCEL request MUST be identical to those in the
+	// request being cancelled, including tags.
+
+	// A CANCEL constructed by a client MUST have only a single Via header
+	// field value matching the top Via value in the request being cancelled.
+	// Using the same values for these header fields allows the CANCEL to
+	// be matched with the request it cancels (Section 9.2 indicates how such matching occurs).
+	//
+	// So set a nil / because via header insert in transport layer
+	cancel.Via = nil
+	// v := cancel.Via.TopMost()
+	// if v == nil {
+	// 	return nil, ErrHeaderParseError
+	// }
+	// cancel.Via = NewViaHeaders()
+	// cancel.Via.Insert(v)
+
+	// However, the method part of the CSeq header field MUST have a value
+	// of CANCEL.
+	cancel.CSeq.Method = "CANCEL"
+
+	// The CANCEL request MUST NOT contain any Require or Proxy-Require
+	// header fields.
+	cancel.Header.Del("Require")
+	cancel.Header.Del("Proxy-Require")
+
+	cancel.ContentLength = 0
+	cancel.Body = nil
+
+	return cancel, nil
 }
 
 func GenerateAckFromRequestAndResponse(req *Message, res *Message) (ack *Message, err error) {
@@ -902,5 +955,11 @@ func CreateBYE(addr, ruri string) (msg *Message) {
 		return nil
 	}
 	msg.RequestURI = uri
+	return msg
+}
+
+func CreateCACNEL(addr string) (msg *Message) {
+	msg = CreateRequest(addr)
+	msg.Method = "CANCEL"
 	return msg
 }

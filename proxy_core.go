@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sip/sip"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -12,6 +14,71 @@ const (
 	TrunkServer
 	TrunkUntrustedServer
 )
+
+var (
+	TimerC = 180 * time.Second
+	//TimerC = 5 * time.Second
+)
+
+type TimerCHandlers struct {
+	mu      sync.Mutex
+	update  map[sip.ClientTransactionKey](chan bool)
+	destroy map[sip.ClientTransactionKey](chan bool)
+}
+
+func (t *TimerCHandlers) Remove(txn sip.ClientTransactionKey) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var okU, okD bool
+	var closeChan chan bool
+	if closeChan, okU = t.update[txn]; okU && closeChan != nil {
+		delete(t.update, txn)
+		close(closeChan)
+		closeChan = nil
+	}
+	if closeChan, okD = t.destroy[txn]; okD && closeChan != nil {
+		delete(t.destroy, txn)
+		close(closeChan)
+		closeChan = nil
+	}
+	return okU || okD
+}
+
+func (t *TimerCHandlers) Get(txn sip.ClientTransactionKey) (chanU, chanD chan bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var ok bool
+	if chanU, ok = t.update[txn]; !ok {
+		return nil, nil
+	}
+	if chanD, ok = t.destroy[txn]; !ok {
+		return nil, nil
+	}
+	return
+}
+
+func (t *TimerCHandlers) Add(txn sip.ClientTransactionKey) (chan bool, chan bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.update[txn] = make(chan bool)
+	if t.update[txn] == nil {
+		return nil, nil
+	}
+	t.destroy[txn] = make(chan bool)
+	if t.destroy[txn] == nil {
+		delete(t.update, txn)
+		return nil, nil
+	}
+	return t.update[txn], t.destroy[txn]
+}
+
+func NewTimerCHandlers() *TimerCHandlers {
+	t := &TimerCHandlers{
+		update:  make(map[sip.ClientTransactionKey](chan bool)),
+		destroy: make(map[sip.ClientTransactionKey](chan bool)),
+	}
+	return t
+}
 
 type ResponseCtx = map[sip.ClientTransactionKey]bool
 type ResponseCtxs struct {
@@ -49,12 +116,12 @@ func (ctxs *ResponseCtxs) Add(st sip.ServerTransactionKey, ct sip.ClientTransact
 	return true
 }
 
-func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (complete, found bool) {
+func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (bool, bool, bool, sip.ServerTransactionKey) {
 	ctxs.mu.Lock()
 	defer ctxs.mu.Unlock()
 	st, ok := ctxs.ctToSt[ct]
 	if !ok {
-		return false, false
+		return false, false, false, st
 	}
 
 	// Delete ct from ct to st map
@@ -64,15 +131,16 @@ func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (complete, found b
 	_, ok = ctxs.stToCt[st][ct]
 	if !ok {
 		// abnormal case but still continue
-		return true, false
+		return true, false, false, st
 	}
 	delete(ctxs.stToCt[st], ct)
 
 	// if st has no children, delete st from st to ct map
 	if len(ctxs.stToCt[st]) == 0 {
 		delete(ctxs.stToCt, st)
+		return true, true, true, st
 	}
-	return true, true
+	return true, true, false, st
 }
 
 func NewResponseCtxs() *ResponseCtxs {
@@ -97,6 +165,7 @@ func lookupTrunkType(addr string) int {
 }
 
 func route(request string) (fwdAddr, fwdDomain string, found bool) {
+	found = true
 	rt := translater.table.Search(request)
 	if rt == nil {
 		return "", "", false
@@ -125,20 +194,28 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 		srv.Warnf("Server Transaction still nil")
 		return nil
 	}
+	update, destroy := timerCHandler.Get(cltTxnKey)
 
 	if msg.StatusCode == sip.StatusTrying {
 		srv.Debugf("100 Trying no need forwaed")
 		return nil
-	} else if msg.StatusCode >= 300 && msg.StatusCode < 400 {
-		// TODO: redirect
-		srv.Debugf("call will be redirected")
-		responseContexts.Remove(cltTxnKey)
-		return nil
+	} else if msg.StatusCode > 100 && msg.StatusCode < 200 {
+		if update != nil {
+			update <- true
+		}
 	} else if msg.StatusCode >= 200 {
+		if destroy != nil {
+			destroy <- true
+		}
 		responseContexts.Remove(cltTxnKey)
+
 		if msg.StatusCode < 300 {
 			// TODO: this call was completed
 			// Write CDR, recoard session, etc.
+		} else if msg.StatusCode >= 300 && msg.StatusCode < 400 {
+			// TODO: redirect
+			srv.Debugf("call will be redirected")
+			return nil
 		} else {
 			// TODO: this call was not completed
 			// Call forward? or through response to caller? etc.
@@ -166,7 +243,7 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 	return nil
 }
 
-func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
+func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
 	from := msg.From
 	// to := msg.To
 
@@ -178,20 +255,25 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	_ = from
 
 	var fwdMsg *sip.Message
+	var err error
+	var status int
 	if len(msg.Header.Values("Route")) != 0 {
 		// this message will re-invite
-		fwdMsg = generateForwardingRequestByRouteHeader(msg)
+		fwdMsg, err, status = generateForwardingRequestByRouteHeader(msg)
+		if err != nil {
+			return sip.ErrStatusError, status
+		}
 	} else {
 		// this message will ini-invite
-		fwdMsg = generateForwardingRequest(msg)
+		fwdMsg, err, status = generateForwardingRequest(msg)
+		if err != nil {
+			return sip.ErrStatusError, status
+		}
 
 		// Routing
 		requestUri := msg.RequestURI
 		if requestUri.Scheme != "sip" && requestUri.Scheme != "tel" {
-			// TODO: Unexpected RequestURI
-			// sip.StatusUnsupportedURIScheme
-			fmt.Printf("Unexpected RequestURI Scheme\n")
-			return nil
+			return sip.ErrStatusError, sip.StatusUnsupportedURIScheme
 		}
 		var requestService string
 
@@ -204,7 +286,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 		fwdAddr, fwdDomain, found := route(requestService)
 
 		if !found {
-			// TODO: Return not found
+			return sip.ErrStatusError, sip.StatusNotFound
 		}
 
 		fwdMsg.RequestURI.Host = fwdDomain
@@ -212,40 +294,117 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 
 		// Insert Record route header
 		recordRoutes := fwdMsg.Header.Values("Record-Route")
-		newRR := fmt.Sprintf("<sip:%s;lr>", srv.Addr)
+		newRR := fmt.Sprintf("<sip:%s;lr>", srv.Address())
 		fwdMsg.Header.Set("Record-Route", newRR)
 		for _, rr := range recordRoutes {
 			fwdMsg.Header.Add("Record-Route", rr)
 		}
 	}
 
-	clientTxn := sip.NewClientInviteTransaction(srv, fwdMsg, 10)
+	clientTxn := sip.NewClientInviteTransaction(srv, fwdMsg, clientTransactionErrorHandler)
 
 	// Add a new response context
 	responseContexts.Add(*(txn.Key), *(clientTxn.Key))
 
-	err := srv.AddClientTransaction(clientTxn)
+	err = srv.AddClientTransaction(clientTxn)
 	if err != nil {
 		srv.Warnf("%v", err)
 		clientTxn.Destroy()
 		// TODO: Return sip.StatusInternalServerError
-		return nil
+		return sip.ErrStatusError, sip.StatusUnsupportedURIScheme
 	}
 	//log.Printf("Sent INVITE\n")
 	clientTxn.WriteMessage(fwdMsg)
 
+	update, destroy := timerCHandler.Add(*(clientTxn.Key))
+	go func() {
+		for {
+			select {
+			case <-time.After(TimerC):
+				fireTimerC(txn, clientTxn)
+				timerCHandler.Remove(*(clientTxn.Key))
+				return
+			case <-update:
+				break
+			case <-destroy:
+				timerCHandler.Remove(*(clientTxn.Key))
+				return
+			}
+		}
+	}()
+
 	// TODO: decide to handling as subsciber or other server
 	switch lookupTrunkType(msg.RemoteAddr) {
 	case TrunkSubscriber:
-		return nil
+		return nil, 0
 	}
 
-	return nil
+	return nil, 0
 }
 
-func generateForwardingRequest(msg *sip.Message) *sip.Message {
+func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
+	log.Printf("Timer C was fired")
+
+	stTransactionCloser := func() {
+		// - Unbind responseContexts
+		_, _, deleteSt, _ := responseContexts.Remove(*(ct.Key))
+		if !deleteSt {
+			return
+		}
+		errRes := st.Request.GenerateResponseFromRequest()
+		errRes.StatusCode = sip.StatusRequestTimeout
+		provRes := st.ProvisionalRes
+		if provRes != nil {
+			errRes.To = provRes.To
+		}
+		errRes.AddToTag()
+		st.WriteMessage(errRes)
+	}
+
+	recivedProvisonalResponse := ct.ProvisionalRes != nil
+	if recivedProvisonalResponse {
+		// - If no response from ct, ct will close after timer F
+		cancelErrorHandler := func(t *sip.ClientTransaction) {
+			if t.Err == sip.ErrTransactionTimedOut {
+				// Send Error to UAC
+				stTransactionCloser()
+			}
+		}
+
+		// If the client transaction has received a provisional response,
+		// the proxy MUST generate a CANCEL request matching that transaction.
+		canMsg, err := sip.GenerateCancelRequest(ct.Request)
+		if err != nil {
+			// Error
+			ct.Destroy()
+			st.Destroy()
+			return
+		}
+		srv := ct.Server
+		canCt := sip.NewClientNonInviteTransaction(srv, canMsg, cancelErrorHandler)
+		err = srv.AddClientTransaction(canCt)
+		if err != nil {
+			srv.Warnf("%v", err)
+			canCt.Destroy()
+			return
+		}
+		canCt.WriteMessage(canMsg)
+	} else {
+		// If the client transaction has not received a provisional response,
+		// the proxy MUST behave as if the transaction received
+		// a 408 (Request Timeout) response.
+
+		// Send Error to UAC
+		stTransactionCloser()
+	}
+
+}
+
+func generateForwardingRequest(msg *sip.Message) (*sip.Message, error, int) {
 	fwdMsg := msg.Clone()
-	fwdMsg.MaxForwards.Decrement()
+	if !fwdMsg.MaxForwards.Decrement() {
+		return nil, sip.ErrStatusError, sip.StatusTooManyHops
+	}
 	topmost := fwdMsg.Via.TopMost()
 	if topmost.SentBy != msg.RemoteAddr {
 		param := topmost.Parameter()
@@ -258,13 +417,16 @@ func generateForwardingRequest(msg *sip.Message) *sip.Message {
 		}
 		topmost.RawParameter = newParam[1:]
 	}
-	return fwdMsg
+	return fwdMsg, nil, 0
 }
 
-func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
+func generateForwardingRequestByRouteHeader(msg *sip.Message) (*sip.Message, error, int) {
 	nextIsLR := false
 
-	fwdMsg := generateForwardingRequest(msg)
+	fwdMsg, err, status := generateForwardingRequest(msg)
+	if err != nil {
+		return nil, err, status
+	}
 	next := fwdMsg.RequestURI.Host
 	routes := sip.NewNameAddrFormatHeaders()
 	for _, route := range fwdMsg.Header.Values("Route") {
@@ -274,7 +436,7 @@ func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 	if routes.Length() > 1 {
 		headOfRouteURI := routes.Header[1].Addr.Uri
 		if headOfRouteURI == nil {
-			return nil
+			return nil, sip.ErrStatusError, sip.StatusInternalServerError
 		}
 		next = headOfRouteURI.Host
 		// check a `lr` flag in top of route header
@@ -298,48 +460,82 @@ func generateForwardingRequestByRouteHeader(msg *sip.Message) *sip.Message {
 		fwdMsg.RequestURI = headOfRouteURI
 	}
 
-	return fwdMsg
+	return fwdMsg, nil, 0
 }
 
-func ackHandler(srv *sip.Server, msg *sip.Message) error {
+func ackHandler(srv *sip.Server, msg *sip.Message) (error, int) {
 	srv.Debugf("Dialog was established\n")
-	fwdMsg := generateForwardingRequestByRouteHeader(msg)
+	fwdMsg, err, status := generateForwardingRequestByRouteHeader(msg)
+	if err != nil {
+		return err, status
+	}
 	srv.WriteMessage(fwdMsg)
-	return nil
+	return nil, 0
 }
 
-func nonInviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
-	fwdMsg := generateForwardingRequestByRouteHeader(msg)
+func nonInviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
+	fwdMsg, err, status := generateForwardingRequestByRouteHeader(msg)
+	if err != nil {
+		return err, status
+	}
 
-	clientTxn := sip.NewClientNonInviteTransaction(srv, fwdMsg, 10)
+	clientTxn := sip.NewClientNonInviteTransaction(srv, fwdMsg, clientTransactionErrorHandler)
 	responseContexts.Add(*(txn.Key), *(clientTxn.Key))
 
-	err := srv.AddClientTransaction(clientTxn)
+	err = srv.AddClientTransaction(clientTxn)
 	if err != nil {
 		srv.Warnf("%v", err)
 		clientTxn.Destroy()
-		// TODO: Return sip.StatusInternalServerError
-		return nil
+		return sip.ErrStatusError, sip.StatusInternalServerError
 	}
 	clientTxn.WriteMessage(fwdMsg)
-	return nil
+	return nil, 0
 }
 
-func registerHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
-	return nil
+func registerHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
+	return nil, 0
 }
 
-func cancelHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
+func cancelHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
 	rep := msg.GenerateResponseFromRequest()
-	rep.StatusCode = 200
+	rep.StatusCode = sip.StatusOk
 	txn.WriteMessage(rep)
 	params := msg.Via.TopMost().Parameter()
 	params.Get("branch")
+	return nil, 0
+}
+
+func makeErrorResponse(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction, status int) error {
+	rep := msg.GenerateResponseFromRequest()
+	rep.StatusCode = status
+	rep.AddToTag()
+	txn.WriteMessage(rep)
 	return nil
 }
 
-func methodNotAllowdHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) error {
-	return nil
+func clientTransactionErrorHandler(txn *sip.ClientTransaction) {
+	var stKey sip.ServerTransactionKey
+	var exist bool
+	stKey, exist = responseContexts.GetStFromCt(*(txn.Key))
+	if !exist {
+		// Nothing to do
+		return
+	}
+	srvTxn := txn.Server.LookupServerTransaction(&stKey).(*sip.ServerTransaction)
+	if srvTxn == nil {
+		// Nothing to do
+		return
+	}
+	_, _, removeSt, _ := responseContexts.Remove(*txn.Key)
+
+	if removeSt {
+		switch txn.Err {
+		case sip.ErrTransactionTimedOut:
+			makeErrorResponse(txn.Server, srvTxn.Request, srvTxn, sip.StatusRequestTimeout)
+		default:
+			makeErrorResponse(txn.Server, srvTxn.Request, srvTxn, sip.StatusInternalServerError)
+		}
+	}
 }
 
 func requestHandler(srv *sip.Server, msg *sip.Message) error {
@@ -364,24 +560,39 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 		}
 	}
 
+	var status int
 	switch msg.Method {
 	case sip.MethodINVITE:
 		srv.Debugf("Handle to INVITE\n")
-		return inviteHandler(srv, msg, txn)
+		err, status = inviteHandler(srv, msg, txn)
+		break
 	case sip.MethodBYE,
 		sip.MethodOPTIONS,
 		sip.MethodUPDATE,
 		sip.MethodPRACK:
 		srv.Debugf("Handle to BYE\n")
-		return nonInviteHandler(srv, msg, txn)
+		err, status = nonInviteHandler(srv, msg, txn)
+		break
 	case sip.MethodREGISTER:
-		return registerHandler(srv, msg, txn)
+		err, status = registerHandler(srv, msg, txn)
+		break
 	case sip.MethodCANCEL:
-		return cancelHandler(srv, msg, txn)
+		err, status = cancelHandler(srv, msg, txn)
+		break
 	case sip.MethodACK:
-		return ackHandler(srv, msg)
+		err, status = ackHandler(srv, msg)
+		break
 	default:
-		return methodNotAllowdHandler(srv, msg, txn)
+		err = sip.ErrStatusError
+		status = sip.StatusMethodNotAllowed
+		break
+	}
+
+	switch err {
+	case sip.ErrStatusError:
+		return makeErrorResponse(srv, msg, txn, status)
+	default:
+		return err
 	}
 }
 

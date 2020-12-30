@@ -40,6 +40,7 @@ var stat = callStat{}
 var callGap = callGapControl{enable: false, last: time.Now()}
 
 var responseContexts *ResponseCtxs
+var timerCHandler *TimerCHandlers
 
 func main() {
 	listenAddr, ok := os.LookupEnv("LISTEN")
@@ -69,6 +70,7 @@ func main() {
 	}
 
 	responseContexts = NewResponseCtxs()
+	timerCHandler = NewTimerCHandlers()
 
 	if !loadTranslater(filepath, sip.LogLevel >= sip.LogDebug) {
 		return

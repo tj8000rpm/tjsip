@@ -121,3 +121,7 @@ var statusText = map[int]string{
 	StatusDoesnotexistanywhere: "Does not exist anywhere",
 	StatusGlobalNotAcceptable:  "Not Acceptable",
 }
+
+var (
+	ErrStatusError = &ProtocolError{"SIP Protocol Status Error"}
+)

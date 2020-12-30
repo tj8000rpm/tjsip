@@ -458,6 +458,7 @@ func (srv *Server) WriteMessage(sentMsg *Message) error {
 
 	w := new(bytes.Buffer)
 	sentMsg.Write(w)
+	srv.Debugf("sent to-------%v\n", sentMsg.RemoteAddr)
 	srv.Debugf("msg-------\n%v\n", w)
 	udpAddr, err := net.ResolveUDPAddr("udp", sentMsg.RemoteAddr)
 	if err != nil {
