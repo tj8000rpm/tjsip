@@ -143,7 +143,7 @@ func (t *ClientTransaction) nonInviteControllerCompleted() {
 	go func() {
 		t.Server.Debugf("[%v] Timer K Start", t.Key)
 		time.Sleep(TimerK)
-		timerKChan <- true
+		close(timerKChan)
 	}()
 	for {
 		select {
@@ -171,7 +171,7 @@ func (t *ClientTransaction) inviteControllerCompleted() {
 	go func() {
 		t.Server.Debugf("[%v] Timer D Start", t.Key)
 		time.Sleep(TimerD)
-		timerDChan <- true
+		close(timerDChan)
 	}()
 	for {
 		select {
@@ -552,11 +552,12 @@ func (t *ServerTransaction) controllerTerminated() {
 
 func (t *ServerTransaction) inviteControllerConfirmed() {
 	t.Server.Debugf("state to confirmed in transacation %v", t.Key)
-	t.State = TransactionStateCompleted
 	t.State = TransactionStateConfirmed
+	timerIChan := make(chan bool)
 	go func() {
+		t.Server.Debugf("[%v] Timer I Start", t.Key)
 		time.Sleep(TimerI)
-		t.controllerTerminated()
+		close(timerIChan)
 	}()
 
 	for {
@@ -570,6 +571,10 @@ func (t *ServerTransaction) inviteControllerConfirmed() {
 			if msg.Request && msg.Method == "ACK" {
 				continue
 			}
+		case <-timerIChan:
+			t.Server.Debugf("[%v] Timer I Fire", t.Key)
+			t.controllerTerminated()
+			return
 		}
 	}
 }
@@ -621,6 +626,7 @@ func (t *ServerTransaction) inviteController() {
 		t.Mu.Unlock()
 		t.Server.WriteMessage(provRes)
 	case msg := <-t.TuChan:
+		t.Server.Debugf("[%v] Received message in InviteController", t.Key)
 		if msg == nil {
 			return
 		}
@@ -700,6 +706,7 @@ func (t *ServerTransaction) inviteController() {
 				return
 			} else {
 				t.Server.Debugf("[%v] Missing way transaction", t.Key)
+				return
 			}
 		}
 	}
@@ -782,6 +789,7 @@ func (t *ServerTransaction) nonInviteController() {
 			t.nonInviteControllerCompleted()
 			return
 		}
+		return
 	}
 
 	t.Server.Debugf("Reply first provisional Response")

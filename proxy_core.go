@@ -194,11 +194,11 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 	cltTxnKey := *cltTxnKey_p
 
 	srvTxnKey, ok := responseContexts.GetStFromCt(cltTxnKey)
-	if !ok && callInstate {
+	if !ok || !callInstate {
 		return nil
 	}
 	srvTxn := srv.LookupServerTransaction(&srvTxnKey)
-	if srvTxn == nil && callInstate {
+	if srvTxn == nil || !callInstate {
 		srv.Warnf("Server Transaction still nil")
 		return nil
 	}
@@ -277,9 +277,10 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 	} else {
 		cpMsg.RemoteAddr = topMostVia.SentBy
 	}
-	if !callInstate {
+	if srvTxn != nil && callInstate {
 		srvTxn.WriteMessage(cpMsg)
 	} else {
+		srv.Debugf("Sent Message without transaction, [%s]", cpMsg.StatusCode)
 		srv.WriteMessage(cpMsg)
 	}
 	return nil
