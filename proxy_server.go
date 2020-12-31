@@ -39,6 +39,7 @@ func (stat *callStat) Increment(response int) {
 var stat = callStat{}
 
 type callInfo struct {
+	mu                sync.Mutex
 	setupTime         time.Time
 	establishedTime   time.Time
 	terminatedTime    time.Time
@@ -49,6 +50,7 @@ type callInfo struct {
 	to                *sip.To
 	recivedRequestURI string
 	sentRequestURI    string
+	closed            bool
 }
 
 func (c *callInfo) String() string {
@@ -78,6 +80,11 @@ func (c *callInfo) String() string {
 }
 
 func (c *callInfo) RecordCaller(msg *sip.Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
 	c.recivedRequestURI = msg.RequestURI.String()
 	c.from = msg.From
 	c.to = msg.To
@@ -87,16 +94,43 @@ func (c *callInfo) RecordCaller(msg *sip.Message) {
 }
 
 func (c *callInfo) RecordCallee(msg *sip.Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
 	c.sentRequestURI = msg.RequestURI.String()
 	c.calleeAddress = msg.RemoteAddr
 }
 
 func (c *callInfo) RecordEstablishedTime() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
 	c.establishedTime = time.Now()
 }
 
 func (c *callInfo) RecordTerminatedTime() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
 	c.terminatedTime = time.Now()
+}
+
+func (c *callInfo) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+}
+
+func (c *callInfo) Closed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 func (c *callInfo) Id() string {
@@ -151,8 +185,14 @@ func (c *CallStates) Close(info *callInfo) bool {
 	if info == nil {
 		return false
 	}
+	info.Close()
+	// Write CDR
 	log.Printf("%s\n", info.String())
-	return c.Remove(info)
+	go func() {
+		time.Sleep(sip.TimerA * 32)
+		c.Remove(info)
+	}()
+	return true
 }
 
 func (c *CallStates) Get(id string) (info *callInfo, ok bool) {
