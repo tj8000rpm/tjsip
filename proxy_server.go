@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"sip/sip"
 	"sync"
 	"time"
@@ -262,10 +263,15 @@ func main() {
 		for {
 			time.Sleep(time.Second * 5)
 			stat.mu.Lock()
+			log.Printf("Current goroutines: %d\n", runtime.NumGoroutine())
 			log.Printf("Call completed: %v\n", stat.completed)
 			log.Printf("Current Call: %v\n", callStates.Length())
 
 			log.Printf("Response Context Size st: %d / ct: %v\n", len(responseContexts.stToCt), len(responseContexts.ctToSt))
+
+			// if runtime.NumGoroutine() > 2 {
+			// 	pprof.Lookup("goroutine").WriteTo(os.Stdout, 2)
+			// }
 			if len(responseContexts.ctToSt) <= 10 {
 				for key, _ := range responseContexts.stToCt {
 					log.Printf("--- %v\n", key)
