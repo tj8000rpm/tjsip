@@ -33,13 +33,9 @@ func (t *TimerCHandlers) Remove(txn sip.ClientTransactionKey) bool {
 	var closeChan chan bool
 	if closeChan, okU = t.update[txn]; okU && closeChan != nil {
 		delete(t.update, txn)
-		close(closeChan)
-		closeChan = nil
 	}
 	if closeChan, okD = t.destroy[txn]; okD && closeChan != nil {
 		delete(t.destroy, txn)
-		close(closeChan)
-		closeChan = nil
 	}
 	return okU || okD
 }
@@ -208,7 +204,10 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 		}
 	} else if msg.StatusCode >= 200 {
 		if destroy != nil {
-			destroy <- true
+			close(destroy)
+			if update != nil {
+				close(update)
+			}
 		}
 		responseContexts.Remove(cltTxnKey)
 
