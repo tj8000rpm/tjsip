@@ -1,6 +1,7 @@
 package sip
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -228,16 +229,17 @@ func (t *ClientTransaction) nonInviteControllerProceeding() {
 				return
 			}
 
-			if msg.StatusCode >= 100 && msg.StatusCode < 700 {
-				if msg.StatusCode >= 200 && msg.StatusCode < 700 {
-					t.FinalRes = msg
-					t.nonInviteControllerCompleted()
-					return
-				} else {
-					t.ProvisionalRes = msg
-					t.nonInviteControllerProceeding()
-					return
+			if msg.StatusCode >= 100 && msg.StatusCode < 200 {
+				t.ProvisionalRes = msg
+				t.nonInviteControllerProceeding()
+				return
+			} else {
+				if msg.StatusCode >= 300 && msg.StatusCode < 700 {
+					t.Err = &ProtocolError{fmt.Sprintf("Non 2XX response %d", msg.StatusCode)}
 				}
+				t.FinalRes = msg
+				t.nonInviteControllerCompleted()
+				return
 			}
 		}
 	}
@@ -350,6 +352,7 @@ func (t *ClientTransaction) inviteController() {
 					return
 				} else if msg.StatusCode >= 300 && msg.StatusCode < 700 {
 					t.FinalRes = msg
+					t.Err = &ProtocolError{fmt.Sprintf("Non 2XX response %d", msg.StatusCode)}
 					ack, err := GenerateAckFromRequestAndResponse(t.Request, msg)
 					if err != nil {
 						t.Server.Debugf("Unable to generate ACK Request / %v", err)

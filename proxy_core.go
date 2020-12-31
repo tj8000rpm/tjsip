@@ -342,7 +342,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	return nil, 0
 }
 
-func responseContextCloser(st *sip.ServerTransaction, ctKey *sip.ClientTransactionKey) {
+func responseContextCloser(st *sip.ServerTransaction, ctKey *sip.ClientTransactionKey, status int) {
 	// - Unbind responseContexts
 	_, _, deleteSt, _ := responseContexts.Remove(*ctKey)
 	if !deleteSt {
@@ -350,7 +350,7 @@ func responseContextCloser(st *sip.ServerTransaction, ctKey *sip.ClientTransacti
 		return
 	}
 	errRes := st.Request.GenerateResponseFromRequest()
-	errRes.StatusCode = sip.StatusRequestTimeout
+	errRes.StatusCode = status
 	provRes := st.ProvisionalRes
 	if provRes != nil {
 		errRes.To = provRes.To
@@ -366,9 +366,15 @@ func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
 	if recivedProvisonalResponse {
 		// - If no response from ct, ct will close after timer F
 		cancelErrorHandler := func(t *sip.ClientTransaction) {
-			if t.Err == sip.ErrTransactionTimedOut {
+			switch t.Err {
+			case sip.ErrTransactionTimedOut:
 				// Send Error to UAC
-				responseContextCloser(st, ct.Key)
+				responseContextCloser(st, ct.Key, sip.StatusRequestTimeout)
+				break
+			case nil:
+				break
+			default:
+				responseContextCloser(st, ct.Key, sip.StatusRequestTerminated)
 			}
 		}
 
@@ -378,7 +384,7 @@ func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
 		if err != nil {
 			// Error
 			ct.Destroy()
-			responseContextCloser(st, ct.Key)
+			responseContextCloser(st, ct.Key, sip.StatusRequestTimeout)
 			return
 		}
 		srv := ct.Server
@@ -396,7 +402,7 @@ func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
 		// a 408 (Request Timeout) response.
 
 		// Send Error to UAC
-		responseContextCloser(st, ct.Key)
+		responseContextCloser(st, ct.Key, sip.StatusRequestTimeout)
 	}
 
 }
@@ -521,9 +527,15 @@ func cancelHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 
 		// - If no response from ct, ct will close after timer F
 		cancelErrorHandler := func(t *sip.ClientTransaction) {
-			if t.Err == sip.ErrTransactionTimedOut {
+			switch t.Err {
+			case sip.ErrTransactionTimedOut:
 				// Send Error to UAC
-				responseContextCloser(origSt, &ctKey)
+				responseContextCloser(origSt, &ctKey, sip.StatusRequestTimeout)
+				break
+			case nil:
+				break
+			default:
+				responseContextCloser(origSt, &ctKey, sip.StatusRequestTerminated)
 			}
 		}
 
@@ -532,7 +544,7 @@ func cancelHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 		if err != nil {
 			srv.Warnf("%v", err)
 			canCt.Destroy()
-			responseContextCloser(origSt, &ctKey)
+			responseContextCloser(origSt, &ctKey, sip.StatusRequestTerminated)
 			return nil, 0
 		}
 		canCt.WriteMessage(canMsg)
