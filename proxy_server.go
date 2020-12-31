@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	TERM_REMOTE = iota
+	TERM_INTERNAL
+)
+
 type lastAccess struct {
 	remoteAddr string
 	lastCall   time.Time
@@ -40,18 +45,20 @@ func (stat *callStat) Increment(response int) {
 var stat = callStat{}
 
 type callInfo struct {
-	mu                sync.Mutex
-	setupTime         time.Time
-	establishedTime   time.Time
-	terminatedTime    time.Time
-	callerAddress     string
-	calleeAddress     string
-	callId            string
-	from              *sip.From
-	to                *sip.To
-	recivedRequestURI string
-	sentRequestURI    string
-	closed            bool
+	mu                   sync.Mutex
+	setupTime            time.Time
+	establishedTime      time.Time
+	terminatedTime       time.Time
+	callerAddress        string
+	calleeAddress        string
+	callId               string
+	from                 *sip.From
+	to                   *sip.To
+	recivedRequestURI    string
+	sentRequestURI       string
+	disconnectedReason   int
+	disconnectedLocation int // 0 remote, 1 internal
+	closed               bool
 }
 
 func (c *callInfo) String() string {
@@ -64,19 +71,35 @@ func (c *callInfo) String() string {
 	if c.establishedTime.IsZero() {
 		eTimeS = ""
 	}
-	return fmt.Sprintf("%d,\"%s\",\"%s\",\"%s\",%d,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"",
+	return fmt.Sprintf(("%d," +
+		"\"%s\",\"%s\",\"%s\"," +
+		"%d," +
+		"\"%s\",\"%s\"," +
+		"\"%s\"," +
+		"\"%s\",\"%s\"," +
+		"\"%s\",\"%s\"," +
+		"%d,%d"),
 		complete,
+
 		c.setupTime,
 		eTimeS,
 		c.terminatedTime,
+
 		duration*time.Second,
+
 		c.callerAddress,
 		c.calleeAddress,
+
 		c.callId,
+
 		c.from.String(),
 		c.to.String(),
+
 		c.recivedRequestURI,
 		c.sentRequestURI,
+
+		c.disconnectedReason,
+		c.disconnectedLocation,
 	)
 }
 
@@ -104,7 +127,7 @@ func (c *callInfo) RecordCallee(msg *sip.Message) {
 	c.calleeAddress = msg.RemoteAddr
 }
 
-func (c *callInfo) RecordEstablishedTime() {
+func (c *callInfo) RecordEstablished(msg *sip.Message) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -113,13 +136,15 @@ func (c *callInfo) RecordEstablishedTime() {
 	c.establishedTime = time.Now()
 }
 
-func (c *callInfo) RecordTerminatedTime() {
+func (c *callInfo) RecordTerminated(msg *sip.Message, location int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return
 	}
 	c.terminatedTime = time.Now()
+	c.disconnectedReason = msg.StatusCode
+	c.disconnectedLocation = location
 }
 
 func (c *callInfo) Close() {

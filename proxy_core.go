@@ -227,13 +227,13 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 			// Write CDR, recoard session, etc.
 			switch msg.CSeq.Method {
 			case sip.MethodINVITE:
-				if !callInstate {
-					info.RecordEstablishedTime()
+				if callInstate {
+					info.RecordEstablished(msg)
 				}
 				break
 			case sip.MethodBYE:
 				if callInstate {
-					info.RecordTerminatedTime()
+					info.RecordTerminated(msg, TERM_REMOTE)
 					callStates.Close(info)
 				}
 				break
@@ -248,13 +248,13 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 			switch msg.CSeq.Method {
 			case sip.MethodINVITE:
 				if callInstate {
-					info.RecordTerminatedTime()
+					info.RecordTerminated(msg, TERM_REMOTE)
 					callStates.Close(info)
 				}
 				break
 			case sip.MethodBYE:
-				if !callInstate {
-					info.RecordTerminatedTime()
+				if callInstate {
+					info.RecordTerminated(msg, TERM_REMOTE)
 					callStates.Close(info)
 				}
 				break
@@ -625,7 +625,7 @@ func makeErrorResponse(srv *sip.Server, msg *sip.Message,
 
 	info, ok := callStates.Get(msg.CallID.String())
 	if ok {
-		info.RecordTerminatedTime()
+		info.RecordTerminated(msg, TERM_INTERNAL)
 		callStates.Close(info)
 	}
 	return nil
