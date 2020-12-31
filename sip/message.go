@@ -768,13 +768,13 @@ func GenerateCancelRequest(req *Message) (cancel *Message, err error) {
 	// RFC3261 P.52
 	// A CANCEL request SHOULD NOT be sent to cancel a request other than
 	// INVITE.
-	if req == nil || !req.Request || req.Method != "INVITE" {
+	if req == nil || !req.Request || req.Method != MethodINVITE {
 		return nil, ErrMalformedMessage
 	}
 	cancel = req.Clone()
 	// CreateCACNEL(req.RemoteAddr)
 
-	cancel.Method = "CANCEL"
+	cancel.Method = MethodCANCEL
 
 	if cancel == nil {
 		return nil, ErrMalformedMessage
@@ -791,14 +791,12 @@ func GenerateCancelRequest(req *Message) (cancel *Message, err error) {
 	// Using the same values for these header fields allows the CANCEL to
 	// be matched with the request it cancels (Section 9.2 indicates how such matching occurs).
 	//
-	// So set a nil / because via header insert in transport layer
-	cancel.Via = nil
-	// v := cancel.Via.TopMost()
-	// if v == nil {
-	// 	return nil, ErrHeaderParseError
-	// }
-	// cancel.Via = NewViaHeaders()
-	// cancel.Via.Insert(v)
+	v := cancel.Via.TopMost()
+	if v == nil {
+		return nil, ErrHeaderParseError
+	}
+	cancel.Via = NewViaHeaders()
+	cancel.Via.Insert(v)
 
 	// However, the method part of the CSeq header field MUST have a value
 	// of CANCEL.
