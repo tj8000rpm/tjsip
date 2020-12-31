@@ -689,7 +689,6 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 		err, status = inviteHandler(srv, msg, txn)
 		break
 	case sip.MethodBYE,
-		sip.MethodOPTIONS,
 		sip.MethodUPDATE,
 		sip.MethodPRACK:
 		err, status = nonInviteHandler(srv, msg, txn)
@@ -699,6 +698,10 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 		break
 	case sip.MethodCANCEL:
 		err, status = cancelHandler(srv, msg, txn)
+		break
+	case sip.MethodOPTIONS:
+		err = sip.ErrStatusError
+		status = sip.StatusOk
 		break
 	case sip.MethodACK:
 		err, status = ackHandler(srv, msg)
