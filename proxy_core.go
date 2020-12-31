@@ -126,17 +126,10 @@ func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (complete, found,
 	delete(ctxs.ctToSt, ct)
 	complete = true
 
-	// Delete ct from st to ct map
-	_, ok := ctxs.stToCt[st][ct]
-	if !ok {
-		// abnormal case but still continue
-		return
-	}
 	delete(ctxs.stToCt[st], ct)
 
-	removeServerTransaction = len(ctxs.stToCt[st]) == 0
 	// if st has no children, delete st from st to ct map
-	if removeServerTransaction {
+	if len(ctxs.stToCt[st]) == 0 {
 		delete(ctxs.stToCt, st)
 	}
 	return
