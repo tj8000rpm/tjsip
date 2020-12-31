@@ -497,6 +497,10 @@ type ServerTransactionKey struct {
 	method    string
 }
 
+func (t *ServerTransactionKey) UpdateMethod(s string) {
+	t.method = s
+}
+
 type ServerTransaction struct {
 	BaseTransaction
 	Key            *ServerTransactionKey

@@ -116,31 +116,34 @@ func (ctxs *ResponseCtxs) Add(st sip.ServerTransactionKey, ct sip.ClientTransact
 	return true
 }
 
-func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (bool, bool, bool, sip.ServerTransactionKey) {
+func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (complete, found,
+	removeServerTransaction bool, st sip.ServerTransactionKey) {
+
 	ctxs.mu.Lock()
 	defer ctxs.mu.Unlock()
-	st, ok := ctxs.ctToSt[ct]
-	if !ok {
-		return false, false, false, st
+	st, found = ctxs.ctToSt[ct]
+	if !found {
+		return
 	}
 
 	// Delete ct from ct to st map
 	delete(ctxs.ctToSt, ct)
+	complete = true
 
 	// Delete ct from st to ct map
-	_, ok = ctxs.stToCt[st][ct]
+	_, ok := ctxs.stToCt[st][ct]
 	if !ok {
 		// abnormal case but still continue
-		return true, false, false, st
+		return
 	}
 	delete(ctxs.stToCt[st], ct)
 
+	removeServerTransaction = len(ctxs.stToCt[st]) == 0
 	// if st has no children, delete st from st to ct map
-	if len(ctxs.stToCt[st]) == 0 {
+	if removeServerTransaction {
 		delete(ctxs.stToCt, st)
-		return true, true, true, st
 	}
-	return true, true, false, st
+	return
 }
 
 func NewResponseCtxs() *ResponseCtxs {
@@ -310,10 +313,8 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	if err != nil {
 		srv.Warnf("%v", err)
 		clientTxn.Destroy()
-		// TODO: Return sip.StatusInternalServerError
-		return sip.ErrStatusError, sip.StatusUnsupportedURIScheme
+		return sip.ErrStatusError, sip.StatusInternalServerError
 	}
-	//log.Printf("Sent INVITE\n")
 	clientTxn.WriteMessage(fwdMsg)
 
 	update, destroy := timerCHandler.Add(*(clientTxn.Key))
@@ -342,24 +343,25 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	return nil, 0
 }
 
+func responseContextCloser(st *sip.ServerTransaction, ctKey *sip.ClientTransactionKey) {
+	// - Unbind responseContexts
+	_, _, deleteSt, _ := responseContexts.Remove(*ctKey)
+	if !deleteSt {
+		// Nothing to do
+		return
+	}
+	errRes := st.Request.GenerateResponseFromRequest()
+	errRes.StatusCode = sip.StatusRequestTimeout
+	provRes := st.ProvisionalRes
+	if provRes != nil {
+		errRes.To = provRes.To
+	}
+	errRes.AddToTag()
+	st.WriteMessage(errRes)
+}
+
 func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
 	log.Printf("Timer C was fired")
-
-	stTransactionCloser := func() {
-		// - Unbind responseContexts
-		_, _, deleteSt, _ := responseContexts.Remove(*(ct.Key))
-		if !deleteSt {
-			return
-		}
-		errRes := st.Request.GenerateResponseFromRequest()
-		errRes.StatusCode = sip.StatusRequestTimeout
-		provRes := st.ProvisionalRes
-		if provRes != nil {
-			errRes.To = provRes.To
-		}
-		errRes.AddToTag()
-		st.WriteMessage(errRes)
-	}
 
 	recivedProvisonalResponse := ct.ProvisionalRes != nil
 	if recivedProvisonalResponse {
@@ -367,7 +369,7 @@ func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
 		cancelErrorHandler := func(t *sip.ClientTransaction) {
 			if t.Err == sip.ErrTransactionTimedOut {
 				// Send Error to UAC
-				stTransactionCloser()
+				responseContextCloser(st, ct.Key)
 			}
 		}
 
@@ -377,7 +379,7 @@ func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
 		if err != nil {
 			// Error
 			ct.Destroy()
-			st.Destroy()
+			responseContextCloser(st, ct.Key)
 			return
 		}
 		srv := ct.Server
@@ -395,7 +397,7 @@ func fireTimerC(st *sip.ServerTransaction, ct *sip.ClientTransaction) {
 		// a 408 (Request Timeout) response.
 
 		// Send Error to UAC
-		stTransactionCloser()
+		responseContextCloser(st, ct.Key)
 	}
 
 }
@@ -497,15 +499,52 @@ func registerHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransacti
 }
 
 func cancelHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
+	lookupTxnKey, err := sip.GenerateServerTransactionKey(msg)
+	if err != nil {
+		return sip.ErrStatusError, sip.StatusInternalServerError
+	}
+	lookupTxnKey.UpdateMethod(sip.MethodINVITE)
+	ctKeys, ok := responseContexts.GetCtFromSt(*lookupTxnKey)
+
+	if !ok {
+		// No matching INVITE Request
+		return sip.ErrStatusError, sip.StatusCallLegTransactionDoesNotExist
+	}
+
 	rep := msg.GenerateResponseFromRequest()
 	rep.StatusCode = sip.StatusOk
 	txn.WriteMessage(rep)
-	params := msg.Via.TopMost().Parameter()
-	params.Get("branch")
+
+	for ctKey, _ := range *ctKeys {
+		origCt := srv.LookupClientTransaction(&ctKey).(*sip.ClientTransaction)
+		origSt := srv.LookupServerTransaction(lookupTxnKey).(*sip.ServerTransaction)
+		canMsg, err := sip.GenerateCancelRequest(origCt.Request)
+
+		// - If no response from ct, ct will close after timer F
+		cancelErrorHandler := func(t *sip.ClientTransaction) {
+			if t.Err == sip.ErrTransactionTimedOut {
+				// Send Error to UAC
+				responseContextCloser(origSt, &ctKey)
+			}
+		}
+
+		canCt := sip.NewClientNonInviteTransaction(srv, canMsg, cancelErrorHandler)
+		err = srv.AddClientTransaction(canCt)
+		if err != nil {
+			srv.Warnf("%v", err)
+			canCt.Destroy()
+			responseContextCloser(origSt, &ctKey)
+			return nil, 0
+		}
+		canCt.WriteMessage(canMsg)
+	}
+
 	return nil, 0
 }
 
-func makeErrorResponse(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction, status int) error {
+func makeErrorResponse(srv *sip.Server, msg *sip.Message,
+	txn *sip.ServerTransaction, status int) error {
+
 	rep := msg.GenerateResponseFromRequest()
 	rep.StatusCode = status
 	rep.AddToTag()
@@ -589,10 +628,12 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 	}
 
 	switch err {
+	case nil:
+		return nil
 	case sip.ErrStatusError:
 		return makeErrorResponse(srv, msg, txn, status)
 	default:
-		return err
+		return makeErrorResponse(srv, msg, txn, sip.StatusInternalServerError)
 	}
 }
 

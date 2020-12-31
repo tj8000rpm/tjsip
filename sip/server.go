@@ -386,6 +386,10 @@ func (s *Server) lookupServerTransaction(query *ServerTransactionKey) Transactio
 	return transaction
 }
 
+func (s *Server) LookupClientTransaction(query *ClientTransactionKey) Transaction {
+	return s.lookupClientTransaction(query)
+}
+
 func (s *Server) lookupClientTransaction(query *ClientTransactionKey) Transaction {
 	s.clientTransactions.Mu.Lock()
 	defer s.clientTransactions.Mu.Unlock()
