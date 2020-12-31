@@ -405,12 +405,15 @@ func (t *ClientTransaction) Controller() {
 }
 
 func NewClientInviteTransaction(srv *Server, msg *Message, f func(*ClientTransaction)) *ClientTransaction {
+	localAddr := srv.Address()
 	if msg.Via == nil {
 		msg.Via = NewViaHeaders()
 	}
-	branch := "branch=" + GenerateBranchParam()
-	v := NewViaHeaderUDP(srv.Address(), branch)
-	msg.Via.Insert(v)
+	if msg.Via.TopMost() == nil || msg.Via.TopMost().SentBy != localAddr {
+		branch := "branch=" + GenerateBranchParam()
+		v := NewViaHeaderUDP(localAddr, branch)
+		msg.Via.Insert(v)
+	}
 	key, err := GenerateClientTransactionKey(msg)
 	if err != nil {
 		return nil
@@ -419,12 +422,15 @@ func NewClientInviteTransaction(srv *Server, msg *Message, f func(*ClientTransac
 }
 
 func NewClientNonInviteTransaction(srv *Server, msg *Message, f func(*ClientTransaction)) *ClientTransaction {
+	localAddr := srv.Address()
 	if msg.Via == nil {
 		msg.Via = NewViaHeaders()
 	}
-	branch := "branch=" + GenerateBranchParam()
-	v := NewViaHeaderUDP(srv.Address(), branch)
-	msg.Via.Insert(v)
+	if msg.Via.TopMost() == nil || msg.Via.TopMost().SentBy != localAddr {
+		branch := "branch=" + GenerateBranchParam()
+		v := NewViaHeaderUDP(localAddr, branch)
+		msg.Via.Insert(v)
+	}
 	key, err := GenerateClientTransactionKey(msg)
 	if err != nil {
 		return nil

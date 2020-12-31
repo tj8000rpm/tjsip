@@ -438,7 +438,8 @@ func (srv *Server) WriteMessage(sentMsg *Message) error {
 				return ErrHeaderParseError
 			}
 		}
-		if sentMsg.Via.TopMost().SentBy != localAddr {
+		if sentMsg.Via.TopMost() == nil || sentMsg.Via.TopMost().SentBy != localAddr {
+			srv.Debugf("Via header appended : %v vs %v\n", sentMsg.Via.TopMost().SentBy, localAddr)
 			v := NewViaHeaderUDP(localAddr, "branch="+GenerateBranchParam())
 			sentMsg.Via.Insert(v)
 		}

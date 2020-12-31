@@ -790,7 +790,6 @@ func GenerateCancelRequest(req *Message) (cancel *Message, err error) {
 	// field value matching the top Via value in the request being cancelled.
 	// Using the same values for these header fields allows the CANCEL to
 	// be matched with the request it cancels (Section 9.2 indicates how such matching occurs).
-	//
 	v := cancel.Via.TopMost()
 	if v == nil {
 		return nil, ErrHeaderParseError
@@ -800,7 +799,7 @@ func GenerateCancelRequest(req *Message) (cancel *Message, err error) {
 
 	// However, the method part of the CSeq header field MUST have a value
 	// of CANCEL.
-	cancel.CSeq.Method = "CANCEL"
+	cancel.CSeq.Method = MethodCANCEL
 
 	// The CANCEL request MUST NOT contain any Require or Proxy-Require
 	// header fields.
