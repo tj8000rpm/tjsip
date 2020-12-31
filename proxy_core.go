@@ -129,7 +129,9 @@ func (ctxs *ResponseCtxs) Remove(ct sip.ClientTransactionKey) (complete, found,
 	delete(ctxs.stToCt[st], ct)
 
 	// if st has no children, delete st from st to ct map
-	if len(ctxs.stToCt[st]) == 0 {
+
+	removeServerTransaction = len(ctxs.stToCt[st]) == 0
+	if removeServerTransaction {
 		delete(ctxs.stToCt, st)
 	}
 	return
@@ -637,6 +639,12 @@ func clientTransactionErrorHandler(txn *sip.ClientTransaction) {
 		// Nothing to do
 		return
 	}
+
+	_, destroy := timerCHandler.Get(*txn.Key)
+	if destroy != nil {
+		close(destroy)
+	}
+
 	srvTxn := txn.Server.LookupServerTransaction(&stKey).(*sip.ServerTransaction)
 	if srvTxn == nil {
 		// Nothing to do
@@ -664,7 +672,7 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 	if msg.Method == sip.MethodINVITE {
 		// Create New INVITE srever transaction
 		txn = sip.NewServerInviteTransaction(srv, txnKey, msg)
-	} else {
+	} else if msg.Method != sip.MethodACK {
 		txn = sip.NewServerNonInviteTransaction(srv, txnKey, msg)
 	}
 	if txn != nil {
