@@ -175,6 +175,22 @@ func route(request string) (fwdAddr, fwdDomain string, found bool) {
 }
 
 func responseHandler(srv *sip.Server, msg *sip.Message) error {
+	if msg.CSeq == nil {
+		return sip.ErrMalformedMessage
+	}
+
+	callCheck := true
+	switch msg.CSeq.Method {
+	case sip.MethodOPTIONS,
+		sip.MethodREGISTER:
+		callCheck = false
+	}
+
+	info, callInstate := callStates.Get(msg.CallID.String())
+	if callCheck && !callInstate {
+		// Ignore response
+		return nil
+	}
 
 	srv.Debugf("Lookup transaction")
 	cltTxnKey_p, err := sip.GenerateClientTransactionKey(msg)
@@ -185,11 +201,11 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 	cltTxnKey := *cltTxnKey_p
 
 	srvTxnKey, ok := responseContexts.GetStFromCt(cltTxnKey)
-	if !ok {
+	if !ok && callInstate {
 		return nil
 	}
 	srvTxn := srv.LookupServerTransaction(&srvTxnKey)
-	if srvTxn == nil {
+	if srvTxn == nil && callInstate {
 		srv.Warnf("Server Transaction still nil")
 		return nil
 	}
@@ -214,6 +230,19 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 		if msg.StatusCode < 300 {
 			// TODO: this call was completed
 			// Write CDR, recoard session, etc.
+			switch msg.CSeq.Method {
+			case sip.MethodINVITE:
+				if !callInstate {
+					info.RecordEstablishedTime()
+				}
+				break
+			case sip.MethodBYE:
+				if callInstate {
+					info.RecordTerminatedTime()
+					callStates.Close(info)
+				}
+				break
+			}
 		} else if msg.StatusCode >= 300 && msg.StatusCode < 400 {
 			// TODO: redirect
 			srv.Debugf("call will be redirected")
@@ -221,6 +250,20 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 		} else {
 			// TODO: this call was not completed
 			// Call forward? or through response to caller? etc.
+			switch msg.CSeq.Method {
+			case sip.MethodINVITE:
+				if callInstate {
+					info.RecordTerminatedTime()
+					callStates.Close(info)
+				}
+				break
+			case sip.MethodBYE:
+				if !callInstate {
+					info.RecordTerminatedTime()
+					callStates.Close(info)
+				}
+				break
+			}
 		}
 	}
 
@@ -241,7 +284,11 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 	} else {
 		cpMsg.RemoteAddr = topMostVia.SentBy
 	}
-	srvTxn.WriteMessage(cpMsg)
+	if !callInstate {
+		srvTxn.WriteMessage(cpMsg)
+	} else {
+		srv.WriteMessage(cpMsg)
+	}
 	return nil
 }
 
@@ -255,6 +302,14 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 		from = sip.ParseFrom(ppi)
 	}
 	_ = from
+
+	info, ok := callStates.Get(msg.CallID.String())
+	if ok {
+		return sip.ErrStatusError, sip.StatusLoopDetected
+	}
+	info = NewCallInfo()
+	info.RecordCaller(msg)
+	callStates.Add(info)
 
 	var fwdMsg *sip.Message
 	var err error
@@ -315,6 +370,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 		return sip.ErrStatusError, sip.StatusInternalServerError
 	}
 	clientTxn.WriteMessage(fwdMsg)
+	info.RecordCallee(fwdMsg)
 
 	update, destroy := timerCHandler.Add(*(clientTxn.Key))
 	go func() {
@@ -481,6 +537,16 @@ func ackHandler(srv *sip.Server, msg *sip.Message) (error, int) {
 }
 
 func nonInviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
+	info, ok := callStates.Get(msg.CallID.String())
+	if !ok {
+		return sip.ErrStatusError, sip.StatusCallLegTransactionDoesNotExist
+	}
+	_ = info
+	switch msg.Method {
+	case sip.MethodBYE:
+		srv.Debugf("Handle to BYE\n")
+		break
+	}
 	fwdMsg, err, status := generateForwardingRequestByRouteHeader(msg)
 	if err != nil {
 		return err, status
@@ -560,6 +626,12 @@ func makeErrorResponse(srv *sip.Server, msg *sip.Message,
 	rep.StatusCode = status
 	rep.AddToTag()
 	txn.WriteMessage(rep)
+
+	info, ok := callStates.Get(msg.CallID.String())
+	if ok {
+		info.RecordTerminatedTime()
+		callStates.Close(info)
+	}
 	return nil
 }
 
@@ -620,7 +692,6 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 		sip.MethodOPTIONS,
 		sip.MethodUPDATE,
 		sip.MethodPRACK:
-		srv.Debugf("Handle to BYE\n")
 		err, status = nonInviteHandler(srv, msg, txn)
 		break
 	case sip.MethodREGISTER:

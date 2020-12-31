@@ -2,6 +2,7 @@ package main
 
 import (
 	//"github.com/tj8000rpm/tjsip/sip"
+	"fmt"
 	"log"
 	"os"
 	"sip/sip"
@@ -37,10 +38,150 @@ func (stat *callStat) Increment(response int) {
 
 var stat = callStat{}
 
+type callInfo struct {
+	setupTime         time.Time
+	establishedTime   time.Time
+	terminatedTime    time.Time
+	callerAddress     string
+	calleeAddress     string
+	callId            string
+	from              *sip.From
+	to                *sip.To
+	recivedRequestURI string
+	sentRequestURI    string
+}
+
+func (c *callInfo) String() string {
+	complete := 0
+	duration := time.Second * 0
+	if !(c.establishedTime.IsZero() || c.terminatedTime.IsZero()) {
+		complete, duration = 1, c.terminatedTime.Sub(c.establishedTime)
+	}
+	eTimeS := c.establishedTime.String()
+	if c.establishedTime.IsZero() {
+		eTimeS = ""
+	}
+	return fmt.Sprintf("%d,\"%s\",\"%s\",\"%s\",%d,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"",
+		complete,
+		c.setupTime,
+		eTimeS,
+		c.terminatedTime,
+		duration*time.Second,
+		c.callerAddress,
+		c.calleeAddress,
+		c.callId,
+		c.from.String(),
+		c.to.String(),
+		c.recivedRequestURI,
+		c.sentRequestURI,
+	)
+}
+
+func (c *callInfo) RecordCaller(msg *sip.Message) {
+	c.recivedRequestURI = msg.RequestURI.String()
+	c.from = msg.From
+	c.to = msg.To
+	c.setupTime = time.Now()
+	c.callerAddress = msg.RemoteAddr
+	c.callId = msg.CallID.String()
+}
+
+func (c *callInfo) RecordCallee(msg *sip.Message) {
+	c.sentRequestURI = msg.RequestURI.String()
+	c.calleeAddress = msg.RemoteAddr
+}
+
+func (c *callInfo) RecordEstablishedTime() {
+	c.establishedTime = time.Now()
+}
+
+func (c *callInfo) RecordTerminatedTime() {
+	c.terminatedTime = time.Now()
+}
+
+func (c *callInfo) Id() string {
+	return c.callId
+}
+
+func NewCallInfo() (c *callInfo) {
+	c = new(callInfo)
+	return c
+}
+
+type CallStates struct {
+	mu    sync.Mutex
+	calls map[string]*callInfo
+}
+
+func (c *CallStates) Add(info *callInfo) bool {
+	if info == nil {
+		return false
+	}
+	id := info.Id()
+	if id == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.calls[id] = info
+	return true
+}
+
+func (c *CallStates) Remove(info *callInfo) bool {
+	if info == nil {
+		return false
+	}
+	id := info.Id()
+	if id == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, ok := c.calls[id]; !ok {
+		return false
+	}
+
+	delete(c.calls, id)
+	return true
+}
+
+func (c *CallStates) Close(info *callInfo) bool {
+	if info == nil {
+		return false
+	}
+	log.Printf("%s\n", info.String())
+	return c.Remove(info)
+}
+
+func (c *CallStates) Get(id string) (info *callInfo, ok bool) {
+	if id == "" {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	info, ok = c.calls[id]
+	return
+}
+
+func (c *CallStates) Length() int {
+	return len(c.calls)
+}
+
+func NewCallStates() (c *CallStates) {
+	c = &CallStates{
+		calls: make(map[string]*callInfo),
+	}
+	return c
+}
+
 var callGap = callGapControl{enable: false, last: time.Now()}
 
 var responseContexts *ResponseCtxs
 var timerCHandler *TimerCHandlers
+var callStates *CallStates
 
 func main() {
 	listenAddr, ok := os.LookupEnv("LISTEN")
@@ -71,6 +212,7 @@ func main() {
 
 	responseContexts = NewResponseCtxs()
 	timerCHandler = NewTimerCHandlers()
+	callStates = NewCallStates()
 
 	if !loadTranslater(filepath, sip.LogLevel >= sip.LogDebug) {
 		return
@@ -81,6 +223,7 @@ func main() {
 			time.Sleep(time.Second * 5)
 			stat.mu.Lock()
 			log.Printf("Call completed: %v\n", stat.completed)
+			log.Printf("Current Call: %v\n", callStates.Length())
 
 			log.Printf("Response Context Size st: %d / ct: %v\n", len(responseContexts.stToCt), len(responseContexts.ctToSt))
 			if len(responseContexts.ctToSt) <= 10 {
