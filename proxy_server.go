@@ -83,6 +83,11 @@ func main() {
 			log.Printf("Call completed: %v\n", stat.completed)
 
 			log.Printf("Response Context Size st: %d / ct: %v\n", len(responseContexts.stToCt), len(responseContexts.ctToSt))
+			if len(responseContexts.ctToSt) <= 10 {
+				for key, _ := range responseContexts.stToCt {
+					log.Printf("--- %v\n", key)
+				}
+			}
 			for idx, val := range stat.completedPerResponse {
 				if val == 0 {
 					continue
