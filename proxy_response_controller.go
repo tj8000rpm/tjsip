@@ -90,6 +90,23 @@ func forwardingResponse(srv *sip.Server, msg *sip.Message, srvTxn *sip.ServerTra
 	return nil
 }
 
+func byeResponseHandler(srv *sip.Server, msg *sip.Message, srvTxn *sip.ServerTransaction,
+	ctKey *sip.ClientTransactionKey, info *callInfo) error {
+
+	cltTxnKey := *ctKey
+	if msg.StatusCode == sip.StatusTrying {
+		srv.Debugf("100 Trying no need forwarded")
+		return nil
+	} else if msg.StatusCode >= 200 {
+		responseContexts.Remove(cltTxnKey)
+		if msg.StatusCode < 300 {
+			info.RecordTerminated(msg, TERM_REMOTE)
+			callStates.Close(info)
+		}
+	}
+	return forwardingResponse(srv, msg, srvTxn)
+}
+
 func invaiteResponseHandler(srv *sip.Server, msg *sip.Message, srvTxn *sip.ServerTransaction,
 	ctKey *sip.ClientTransactionKey, info *callInfo) error {
 	cltTxnKey := *ctKey
@@ -97,7 +114,7 @@ func invaiteResponseHandler(srv *sip.Server, msg *sip.Message, srvTxn *sip.Serve
 	update, destroy := timerCHandler.Get(cltTxnKey)
 
 	if msg.StatusCode == sip.StatusTrying {
-		srv.Debugf("100 Trying no need forwaed")
+		srv.Debugf("100 Trying no need forwarded")
 		return nil
 	} else if msg.StatusCode > 100 && msg.StatusCode < 200 {
 		if update != nil {
@@ -121,7 +138,6 @@ func invaiteResponseHandler(srv *sip.Server, msg *sip.Message, srvTxn *sip.Serve
 			callStates.Close(info)
 		}
 	}
-
 	return forwardingResponse(srv, msg, srvTxn)
 }
 
@@ -164,84 +180,15 @@ func responseHandler(srv *sip.Server, msg *sip.Message) error {
 	switch msg.CSeq.Method {
 	case sip.MethodINVITE:
 		return invaiteResponseHandler(srv, msg, srvTxn.(*sip.ServerTransaction), cltTxnKey_p, info)
+	case sip.MethodBYE:
+		return byeResponseHandler(srv, msg, srvTxn.(*sip.ServerTransaction), cltTxnKey_p, info)
 	}
-
-	update, destroy := timerCHandler.Get(cltTxnKey)
 
 	if msg.StatusCode == sip.StatusTrying {
-		srv.Debugf("100 Trying no need forwaed")
+		srv.Debugf("100 Trying no need forwarded")
 		return nil
-	} else if msg.StatusCode > 100 && msg.StatusCode < 200 {
-		if update != nil {
-			update <- true
-		}
 	} else if msg.StatusCode >= 200 {
-		if destroy != nil {
-			close(destroy)
-			if update != nil {
-				close(update)
-			}
-		}
 		responseContexts.Remove(cltTxnKey)
-
-		if msg.StatusCode < 300 {
-			switch msg.CSeq.Method {
-			case sip.MethodINVITE:
-				if callInstate {
-					info.RecordEstablished(msg)
-				}
-				break
-			case sip.MethodBYE:
-				if callInstate {
-					info.RecordTerminated(msg, TERM_REMOTE)
-					callStates.Close(info)
-				}
-				break
-			}
-		} else if msg.StatusCode >= 300 && msg.StatusCode < 400 {
-			return forwardRedirection(srv, msg, info, srvTxn.(*sip.ServerTransaction))
-		} else {
-			// TODO: this call was not completed
-			// Call forward? or through response to caller? etc.
-			switch msg.CSeq.Method {
-			case sip.MethodINVITE:
-				if callInstate {
-					info.RecordTerminated(msg, TERM_REMOTE)
-					callStates.Close(info)
-				}
-				break
-			case sip.MethodBYE:
-				if callInstate {
-					info.RecordTerminated(msg, TERM_REMOTE)
-					callStates.Close(info)
-				}
-				break
-			}
-		}
 	}
-
-	cpMsg := msg.Clone()
-	if cpMsg == nil {
-		srv.Warnf("Message could not copied")
-		return nil
-	}
-	srv.Debugf("Message was copied")
-	cpMsg.Via.Pop()
-	topMostVia := cpMsg.Via.TopMost()
-	if topMostVia == nil {
-		// Message not forwarded
-		return nil
-	}
-	if received := topMostVia.Parameter().Get("received"); received != "" {
-		cpMsg.RemoteAddr = received
-	} else {
-		cpMsg.RemoteAddr = topMostVia.SentBy
-	}
-	if srvTxn != nil && callInstate {
-		srvTxn.WriteMessage(cpMsg)
-	} else {
-		srv.Debugf("Sent Message without transaction, [%s]", cpMsg.StatusCode)
-		srv.WriteMessage(cpMsg)
-	}
-	return nil
+	return forwardingResponse(srv, msg, srvTxn.(*sip.ServerTransaction))
 }

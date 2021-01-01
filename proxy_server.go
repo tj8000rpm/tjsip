@@ -80,7 +80,7 @@ func (c *callInfo) String() string {
 	}
 	return fmt.Sprintf(("%d," +
 		"\"%s\",\"%s\",\"%s\"," +
-		"%d," + // duration
+		"%s," + // duration
 		"\"%s\",\"%s\"," + // Addresses
 		"\"%s\",\"%s\"," + // Contacts
 		"\"%s\"," + //callId
@@ -93,7 +93,7 @@ func (c *callInfo) String() string {
 		eTimeS,
 		c.terminatedTime,
 
-		duration*time.Second,
+		fmt.Sprintf("%.2f", float64(duration/time.Second)),
 
 		c.callerAddress,
 		c.calleeAddress,
@@ -243,6 +243,7 @@ func (c *CallStates) Close(info *callInfo) bool {
 	}
 	info.Close()
 	// Write CDR
+	log.Printf("%s\n", info.String())
 	go func() {
 		time.Sleep(sip.TimerA * 32)
 		c.Remove(info)
