@@ -1,4 +1,5 @@
 service,127.0.0.1:5062,example.com
+service2,127.0.0.1:5063,example.com
 128,192.168.100.128:5060,example.com
 0,192.168.100.128:5060,0.example.com
 1,192.168.100.128:5060,1.example.com

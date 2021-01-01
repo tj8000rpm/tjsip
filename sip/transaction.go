@@ -320,7 +320,6 @@ func (t *ClientTransaction) inviteController() {
 		case <-t.DelChan:
 			t.Server.Debugf("[%v] Received delete signal", t.Key)
 			t.Err = ErrTransactionClosed
-			t.Destroy()
 			return
 		case <-time.After(timerA):
 			// retransmit final response
@@ -364,6 +363,7 @@ func (t *ClientTransaction) inviteController() {
 					t.ack = ack
 					t.Mu.Unlock()
 					t.inviteControllerCompleted()
+					return
 				} else {
 					t.ProvisionalRes = msg
 					t.inviteControllerProceeding()

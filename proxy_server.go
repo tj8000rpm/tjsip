@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+// import "runtime/pprof"
+
 const (
 	TERM_REMOTE = iota
 	TERM_INTERNAL
@@ -45,20 +47,25 @@ func (stat *callStat) Increment(response int) {
 var stat = callStat{}
 
 type callInfo struct {
-	mu                   sync.Mutex
-	setupTime            time.Time
-	establishedTime      time.Time
-	terminatedTime       time.Time
-	callerAddress        string
-	calleeAddress        string
-	callId               string
-	from                 *sip.From
-	to                   *sip.To
-	recivedRequestURI    string
-	sentRequestURI       string
-	disconnectedReason   int
-	disconnectedLocation int // 0 remote, 1 internal
-	closed               bool
+	mu                    sync.Mutex
+	setupTime             time.Time
+	establishedTime       time.Time
+	terminatedTime        time.Time
+	callerAddress         string
+	callerContact         string
+	calleeAddress         string
+	calleeContact         string
+	callId                string
+	from                  *sip.From
+	to                    *sip.To
+	recivedRequestURI     string
+	sentRequestURI        string
+	disconnectedReason    int
+	disconnectedLocation  int // 0 remote, 1 internal
+	receivedRequest       *sip.Message
+	sentRequest           *sip.Message
+	receivedFinalResponse *sip.Message
+	closed                bool
 }
 
 func (c *callInfo) String() string {
@@ -73,9 +80,10 @@ func (c *callInfo) String() string {
 	}
 	return fmt.Sprintf(("%d," +
 		"\"%s\",\"%s\",\"%s\"," +
-		"%d," +
-		"\"%s\",\"%s\"," +
-		"\"%s\"," +
+		"%d," + // duration
+		"\"%s\",\"%s\"," + // Addresses
+		"\"%s\",\"%s\"," + // Contacts
+		"\"%s\"," + //callId
 		"\"%s\",\"%s\"," +
 		"\"%s\",\"%s\"," +
 		"%d,%d"),
@@ -89,6 +97,9 @@ func (c *callInfo) String() string {
 
 		c.callerAddress,
 		c.calleeAddress,
+
+		c.callerContact,
+		c.calleeContact,
 
 		c.callId,
 
@@ -114,7 +125,13 @@ func (c *callInfo) RecordCaller(msg *sip.Message) {
 	c.to = msg.To
 	c.setupTime = time.Now()
 	c.callerAddress = msg.RemoteAddr
+	if msg.Contact != nil {
+		for _, contact := range msg.Contact.Header {
+			c.callerContact = contact.String()
+		}
+	}
 	c.callId = msg.CallID.String()
+	c.receivedRequest = msg
 }
 
 func (c *callInfo) RecordCallee(msg *sip.Message) {
@@ -125,6 +142,7 @@ func (c *callInfo) RecordCallee(msg *sip.Message) {
 	}
 	c.sentRequestURI = msg.RequestURI.String()
 	c.calleeAddress = msg.RemoteAddr
+	c.sentRequest = msg
 }
 
 func (c *callInfo) RecordEstablished(msg *sip.Message) {
@@ -134,6 +152,12 @@ func (c *callInfo) RecordEstablished(msg *sip.Message) {
 		return
 	}
 	c.establishedTime = time.Now()
+	if msg.Contact != nil {
+		for _, contact := range msg.Contact.Header {
+			c.calleeContact = contact.String()
+		}
+	}
+	c.receivedFinalResponse = msg
 }
 
 func (c *callInfo) RecordTerminated(msg *sip.Message, location int) {
@@ -151,6 +175,12 @@ func (c *callInfo) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
+}
+
+func (c *callInfo) SentRequest() *sip.Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sentRequest
 }
 
 func (c *callInfo) Closed() bool {
@@ -213,7 +243,6 @@ func (c *CallStates) Close(info *callInfo) bool {
 	}
 	info.Close()
 	// Write CDR
-	log.Printf("%s\n", info.String())
 	go func() {
 		time.Sleep(sip.TimerA * 32)
 		c.Remove(info)
@@ -297,11 +326,6 @@ func main() {
 			// if runtime.NumGoroutine() > 2 {
 			// 	pprof.Lookup("goroutine").WriteTo(os.Stdout, 2)
 			// }
-			if len(responseContexts.ctToSt) <= 10 {
-				for key, _ := range responseContexts.stToCt {
-					log.Printf("--- %v\n", key)
-				}
-			}
 			for idx, val := range stat.completedPerResponse {
 				if val == 0 {
 					continue

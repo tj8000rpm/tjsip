@@ -348,6 +348,7 @@ func (s *Server) AddClientTransaction(transaction *ClientTransaction) error {
 	if s.clientTransactions.Transactions == nil {
 		s.clientTransactions.Transactions = make(map[ClientTransactionKey]*ClientTransaction)
 	}
+
 	s.clientTransactions.Transactions[*key] = transaction
 	s.Debugf("Client Transaction size: %d", len(s.clientTransactions.Transactions))
 	return nil
