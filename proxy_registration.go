@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var MinimumRegisterExpiresValue = 900
+var MinimumRegisterExpiresValue = 90
 
 const (
 	REGISTRATION_QUERY = iota
@@ -29,6 +29,13 @@ type RegistrationResult struct {
 	Header  http.Header
 }
 
+type TableReigster struct {
+	Aor       string
+	Bind      string
+	Q         int // float value is store as int like 1.00=100 ~ 0.00=0
+	ExpiredAt int64
+}
+
 func NewRegistrationResult(status int) *RegistrationResult {
 	r := new(RegistrationResult)
 	r.Status = status
@@ -39,24 +46,7 @@ type RegistrationOperation struct {
 	Operation int
 	BindAddr  *sip.URI
 	Expires   int
-	Q         float64
-}
-
-type TableRegisterSeq struct {
-	aor    string
-	callId string
-	seq    int
-}
-
-type TableRegister struct {
-	aor       string
-	bind      string
-	q         float64
-	expiredAt int64
-}
-
-type TxnRegister struct {
-	txn *sql.Tx
+	Q         int
 }
 
 type RegisterController struct {
@@ -75,6 +65,7 @@ func NewRegiserController() *RegisterController {
 			return nil
 		}
 	}
+
 	db, err := sql.Open("sqlite3", sqlitePath)
 	if err != nil {
 		log.Printf("SQL open error")
@@ -92,10 +83,11 @@ func NewRegiserController() *RegisterController {
 		CREATE TABLE register (
 			aor VARCHAR(255),
 			bind VARCHAR(255),
-			q REAL,
+			q INTEGER,
 			expired_at INTEGER);
 		`
-	_, err = reg.issueExec(createTable)
+
+	_, err = db.Exec(createTable)
 	if err != nil {
 		log.Printf("db create error")
 		return nil
@@ -104,45 +96,61 @@ func NewRegiserController() *RegisterController {
 	return reg
 }
 
-func (r *RegisterController) issueExec(q string) (sql.Result, error) {
-	res, err := r.db.Exec(q)
-	return res, err
-}
-
-func (r *RegisterController) issueQuery(q string) (*sql.Rows, error) {
-	res, err := r.db.Query(q)
-	log.Printf("%v", res)
-	return res, err
-}
-
-func (r *RegisterController) begin() (*sql.Tx, error) {
+func (r *RegisterController) Begin() (*sql.Tx, error) {
 	return r.db.Begin()
+}
+
+func (r *RegisterController) DB() *sql.DB {
+	return r.db
 }
 
 func NewRegistrationOperation() *RegistrationOperation {
 	return new(RegistrationOperation)
 }
 
-func rollBacking(r *RegisterController) (*RegistrationResult, error) {
-	_, err := register.issueExec("ROLLBACK;")
+func queryBindingNow(dbTxn *sql.Tx, db *sql.DB, aor *sip.URI) (res []*TableReigster, err error) {
+	return queryBinding(dbTxn, db, aor, time.Now().Unix())
+}
+
+func queryBinding(dbTxn *sql.Tx, db *sql.DB, aor *sip.URI, now int64) (res []*TableReigster, err error) {
+	var rows *sql.Rows
+	query := "SELECT bind, q, expired_at FROM register " +
+		"WHERE aor = ? AND expired_at >= ? ORDER BY q DESC"
+	if dbTxn != nil {
+		rows, err = dbTxn.Query(query, aor.String(), now)
+	} else if db != nil {
+		rows, err = db.Query(query, aor.String(), now)
+	} else {
+		return nil, fmt.Errorf("Either *sip.Tx or *sip.DB must not be nil")
+	}
+
 	if err != nil {
-		log.Printf("err: %v", err)
 		return nil, err
 	}
-	result := NewRegistrationResult(sip.StatusBadRequest)
-	return result, nil
+	defer rows.Close()
+
+	res = make([]*TableReigster, 0)
+
+	for rows.Next() {
+		bind := new(TableReigster)
+		bind.Aor = aor.String()
+		if err = rows.Scan(&bind.Bind, &bind.Q, &bind.ExpiredAt); err != nil {
+			return nil, err
+		}
+		res = append(res, bind)
+	}
+	return res, nil
 }
 
 func issueTransaction(aor *sip.URI, operations []*RegistrationOperation,
 	callId string, cseqNum int64) (*RegistrationResult, error) {
 
-	dbTxn, err := register.begin()
+	dbTxn, err := register.Begin()
 	if err != nil {
 		log.Printf("err: %v", err)
 		return nil, err
 	}
 	defer func() {
-		// panicがおきたらロールバック
 		if err := recover(); err != nil {
 			dbTxn.Rollback()
 		}
@@ -177,43 +185,26 @@ func issueTransaction(aor *sip.URI, operations []*RegistrationOperation,
 
 	var contacts *sip.ContactHeaders
 
-	secs := time.Now().Unix()
+	now := time.Now().Unix()
 	for _, op := range operations {
 		switch op.Operation {
 		case REGISTRATION_QUERY:
 			contacts = sip.NewContactHeaders()
-			err = func() error {
-				rows, errIn := dbTxn.Query("SELECT bind, q, expired_at FROM register "+
-					"WHERE aor = ? AND expired_at >= ?",
-					aor.String(), secs)
-
-				if errIn != nil {
-					return errIn
-				}
-				defer rows.Close()
-
-				for rows.Next() {
-					var dbBind string
-					var dbQ float64
-					var dbExpiredAt int64
-					if errIn = rows.Scan(&dbBind, &dbQ, &dbExpiredAt); errIn != nil {
-						return errIn
-					}
-					rawParam := fmt.Sprintf("q=%.2f;expires=%d", dbQ, dbExpiredAt-secs)
-					contacts.Add(sip.NewContactHeaderFromString("", dbBind, rawParam))
-				}
-				return nil
-			}()
+			result, err := queryBinding(dbTxn, nil, aor, now)
 			if err != nil {
 				dbTxn.Rollback()
 				return nil, err
+			}
+			for _, bind := range result {
+				rawParam := fmt.Sprintf("q=%.2f;expires=%d", float64(bind.Q)/100, bind.ExpiredAt-now)
+				contacts.Add(sip.NewContactHeaderFromString("", bind.Bind, rawParam))
 			}
 		case REGISTRATION_UPDATE:
 			_, err = dbTxn.Exec("DELETE FROM register WHERE aor = ? AND bind = ?",
 				aor.String(), op.BindAddr.String())
 			_, err = dbTxn.Exec("INSERT INTO register (aor, bind, q, expired_at)"+
 				" VALUES (?, ?, ?, ?)",
-				aor.String(), op.BindAddr.String(), op.Q, int64(op.Expires)+secs)
+				aor.String(), op.BindAddr.String(), op.Q, int64(op.Expires)+now)
 			if err != nil {
 				dbTxn.Rollback()
 				return nil, err
@@ -261,17 +252,21 @@ func determOperation(contact *sip.Contact, expires int, okE bool,
 	if contact.Addr == nil || contact.Addr.Uri == nil {
 		return nil, sip.StatusBadRequest
 	}
-	var q float64
-	var pExpires int
+	var qFloat float64
+	var q, pExpires int
 	var err error
 	qStr := contact.Parameter().Get("q")
 	okQ := qStr != ""
 	if okQ && err != nil {
 		return nil, sip.StatusBadRequest
 	}
-	q, err = strconv.ParseFloat(qStr, 64)
+	qFloat, err = strconv.ParseFloat(qStr, 64)
 	if err != nil {
-		q = 0.0
+		qFloat = 0.0
+	}
+	q = int(qFloat * 100)
+	if q > 1 || q < 0 {
+		return nil, sip.StatusBadRequest
 	}
 	operation.BindAddr = bindAddr
 
@@ -281,15 +276,15 @@ func determOperation(contact *sip.Contact, expires int, okE bool,
 	if okPE && err != nil {
 		return nil, sip.StatusBadRequest
 	}
-	if (okPE && expires == 0) || (okE && pExpires == 0) {
+	if (okPE && pExpires == 0) || (okE && expires == 0 && !okPE) {
 		operation.Operation = REGISTRATION_DEL
 		return operation, 0
 	}
 	expectExpires := MinimumRegisterExpiresValue
 	if okE {
-		expectExpires = pExpires
-	} else if okPE {
 		expectExpires = expires
+	} else if okPE {
+		expectExpires = pExpires
 	}
 	if expectExpires < MinimumRegisterExpiresValue {
 		return nil, sip.StatusIntervalTooBrief

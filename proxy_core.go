@@ -157,17 +157,6 @@ func lookupTrunkType(addr string) int {
 	return TrunkSubscriber
 }
 
-func route(request string) (fwdAddr, fwdDomain string, found bool) {
-	found = true
-	rt := translater.table.Search(request)
-	if rt == nil {
-		return "", "", false
-	}
-	fwdAddr = rt.fwd.Addr
-	fwdDomain = rt.fwd.Domain
-	return
-}
-
 func responseContextCloser(st *sip.ServerTransaction, ctKey *sip.ClientTransactionKey, status int) {
 	// - Unbind responseContexts
 	_, _, deleteSt, _ := responseContexts.Remove(*ctKey)

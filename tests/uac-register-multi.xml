@@ -30,7 +30,6 @@
   </nop>
 
   <!--
-      Contact: <sip:sipp@[local_ip]:[local_port]>;epires=900
       Call-ID: [call_id]
   -->
 
@@ -40,11 +39,15 @@
       REGISTER sip:[remote_ip]:[remote_port] SIP/2.0
       Via: SIP/2.0/[transport] example.com;branch=[$orig_branch]
       From: sipp <sip:sipp@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      To: <sip:service@[local_ip]:5063>
+      To: <sip:sipp@[local_ip]:[local_port]>
       CSeq: 1 REGISTER
       Call-ID: [call_id]
       Max-Forwards: 70
       Subject: Performance Test
+      Contact: <sip:sipp@[local_ip]:5061>;epires=900;q=1.0
+      Contact: <sip:sipp@[local_ip]:5070>;epires=900
+      Contact: <sip:sipp@[local_ip]:5071>;epires=900
+      Contact: <sip:sipp@[local_ip]:5072>;epires=900, <sip:sipp@[local_ip]:5072>;epires=900;q=0.5
 
     ]]>
   </send>

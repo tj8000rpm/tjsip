@@ -4,6 +4,7 @@ import (
 	//"github.com/tj8000rpm/tjsip/sip"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"runtime"
 	"sip/sip"
@@ -281,6 +282,7 @@ var callStates *CallStates
 var register *RegisterController
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	listenAddr, ok := os.LookupEnv("LISTEN")
 	if !ok {
 		listenAddr = ""

@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"math/rand"
 	"sip/sip"
 	"time"
 )
@@ -15,15 +17,7 @@ func inviteRouted(fwdMsg *sip.Message) (error, int) {
 	if requestUri.Scheme != "sip" && requestUri.Scheme != "tel" {
 		return sip.ErrStatusError, sip.StatusUnsupportedURIScheme
 	}
-	var requestService string
-
-	switch requestUri.Scheme {
-	case "sip":
-		requestService = requestUri.User.Username()
-	case "tel":
-		requestService = requestUri.Host
-	}
-	fwdAddr, fwdDomain, found := route(requestService)
+	fwdAddr, fwdDomain, found := route(requestUri)
 
 	if !found {
 		return sip.ErrStatusError, sip.StatusNotFound
@@ -389,4 +383,54 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 	default:
 		return makeErrorResponse(srv, msg, txn, sip.StatusInternalServerError)
 	}
+}
+
+func route(requestUri *sip.URI) (fwdAddr, fwdDomain string, found bool) {
+	var requestService string
+
+	candidates := make([]*sip.URI, 0)
+
+	binds, err := queryBindingNow(nil, register.DB(), requestUri)
+	if err == nil && len(binds) > 0 {
+		lastQvalue := 0
+		i := 0
+		for _, bind := range binds {
+			if lastQvalue > bind.Q {
+				break
+			}
+			uri, err := sip.Parse(bind.Bind)
+			if bind.Aor == "" || bind.Bind == "" || err != nil {
+				log.Printf("Unexpected Status %v", bind)
+				log.Printf("But try cotinue")
+				continue
+			}
+			candidates = append(candidates, uri)
+			lastQvalue = bind.Q
+			i++
+		}
+		candidates = candidates[:i]
+	}
+
+	if len(candidates) > 0 {
+		choosen := candidates[rand.Intn(len(candidates))]
+		fwdAddr = choosen.Host
+		fwdDomain = choosen.Host
+		found = true
+		return
+	}
+
+	switch requestUri.Scheme {
+	case "sip":
+		requestService = requestUri.User.Username()
+	case "tel":
+		requestService = requestUri.Host
+	}
+	found = true
+	rt := translater.table.Search(requestService)
+	if rt == nil {
+		return "", "", false
+	}
+	fwdAddr = rt.fwd.Addr
+	fwdDomain = rt.fwd.Domain
+	return
 }
