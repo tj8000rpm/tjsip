@@ -197,15 +197,9 @@ func ackHandler(srv *sip.Server, msg *sip.Message) (error, int) {
 }
 
 func nonInviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
-	info, ok := callStates.Get(msg.CallID.String())
+	_, ok := callStates.Get(msg.CallID.String())
 	if !ok {
 		return sip.ErrStatusError, sip.StatusCallLegTransactionDoesNotExist
-	}
-	_ = info
-	switch msg.Method {
-	case sip.MethodBYE:
-		srv.Debugf("Handle to BYE\n")
-		break
 	}
 	fwdMsg, err, status := generateForwardingRequestByRouteHeader(msg)
 	if err != nil {
@@ -226,6 +220,26 @@ func nonInviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransact
 }
 
 func registerHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
+	result := registration(msg)
+	if result == nil {
+		return sip.ErrStatusError, sip.StatusInternalServerError
+	}
+
+	rep := msg.GenerateResponseFromRequest()
+	rep.StatusCode = result.Status
+	rep.Contact = result.Contact
+	rep.AddToTag()
+	if rep.Header == nil {
+		rep.Header = result.Header
+	} else if result.Header != nil {
+		for key, values := range result.Header {
+			for _, value := range values {
+				result.Header.Add(key, value)
+			}
+		}
+	}
+
+	txn.WriteMessage(rep)
 	return nil, 0
 }
 
@@ -296,9 +310,7 @@ func makeErrorResponse(srv *sip.Server, msg *sip.Message,
 }
 
 func clientTransactionErrorHandler(txn *sip.ClientTransaction) {
-	var stKey sip.ServerTransactionKey
-	var exist bool
-	stKey, exist = responseContexts.GetStFromCt(*(txn.Key))
+	stKey, exist := responseContexts.GetStFromCt(*(txn.Key))
 	if !exist {
 		// Nothing to do
 		return
@@ -348,34 +360,25 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 		}
 	}
 
-	var status int
+	err = sip.ErrStatusError
+	status := sip.StatusMethodNotAllowed
 	switch msg.Method {
 	case sip.MethodINVITE:
 		srv.Debugf("Handle to INVITE\n")
 		err, status = inviteHandler(srv, msg, txn)
-		break
 	case sip.MethodBYE,
 		sip.MethodUPDATE,
 		sip.MethodPRACK:
 		err, status = nonInviteHandler(srv, msg, txn)
-		break
 	case sip.MethodREGISTER:
 		err, status = registerHandler(srv, msg, txn)
-		break
 	case sip.MethodCANCEL:
 		err, status = cancelHandler(srv, msg, txn)
-		break
 	case sip.MethodOPTIONS:
 		err = sip.ErrStatusError
 		status = sip.StatusOk
-		break
 	case sip.MethodACK:
 		err, status = ackHandler(srv, msg)
-		break
-	default:
-		err = sip.ErrStatusError
-		status = sip.StatusMethodNotAllowed
-		break
 	}
 
 	switch err {

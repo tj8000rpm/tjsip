@@ -278,6 +278,7 @@ var callGap = callGapControl{enable: false, last: time.Now()}
 var responseContexts *ResponseCtxs
 var timerCHandler *TimerCHandlers
 var callStates *CallStates
+var register *RegisterController
 
 func main() {
 	listenAddr, ok := os.LookupEnv("LISTEN")
@@ -309,6 +310,7 @@ func main() {
 	responseContexts = NewResponseCtxs()
 	timerCHandler = NewTimerCHandlers()
 	callStates = NewCallStates()
+	register = NewRegiserController()
 
 	if !loadTranslater(filepath, sip.LogLevel >= sip.LogDebug) {
 		return
