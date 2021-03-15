@@ -45,11 +45,13 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 		// This is established call will Reinvite etc
 		//return sip.ErrStatusError, sip.StatusLoopDetected
 	} else {
-		authorized, _ := authMessage("Proxy-Authorization", msg, queryA1md5)
-		if !authorized {
-			generateAuthRequireHeader("Proxy-Authenticate")
-			return sip.ErrStatusError, sip.StatusProxyAuthenticationRequired, nil
-		}
+		/*
+			authorized, _ := authMessage("Proxy-Authorization", msg, queryA1md5)
+			if !authorized {
+				generateAuthRequireHeader("Proxy-Authenticate")
+				return sip.ErrStatusError, sip.StatusProxyAuthenticationRequired, nil
+			}
+		*/
 	}
 	info = NewCallInfo()
 	info.RecordCaller(msg)
