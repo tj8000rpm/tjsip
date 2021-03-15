@@ -922,6 +922,23 @@ func TestParseContact(t *testing.T) {
 	}
 }
 
+func TestParseContact2(t *testing.T) {
+	s := "<sip:172.16.0.2:5060>"
+	c := ParseContact(s)
+	if actual, expect := c.String(), s; actual != expect {
+		t.Errorf("Not valid Contact String: expect %s, but given '%s'", expect, actual)
+	}
+}
+
+func TestCloneContact2(t *testing.T) {
+	s := "<sip:172.16.0.2:5060>"
+	c := ParseContact(s)
+	c = c.Clone()
+	if actual, expect := c.String(), s; actual != expect {
+		t.Errorf("Not valid Contact String: expect %s, but given '%s'", expect, actual)
+	}
+}
+
 func TestParseContacts(t *testing.T) {
 	c := NewContactHeaders()
 	s := ("\"Mr. Watson\" <sip:watson@worcester.bell-telephone.com> ;q=0.7; " +
@@ -954,6 +971,19 @@ func TestParseContacts(t *testing.T) {
 	}
 	if actual, expect := mailc.RawParameter, "q=0.1"; actual != expect {
 		t.Errorf("Not valid Contact RawParameter: expect %v, but given '%v'", expect, actual)
+	}
+}
+
+func TestParseContacts_case2(t *testing.T) {
+	c := NewContactHeaders()
+	s := "<sip:172.16.0.2:5060>"
+	ParseContacts(s, c)
+	sipc := c.Header[0]
+	if actual, expect := sipc.String(), s; actual != expect {
+		t.Errorf("Not valid Contact String(): expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := c.WriteHeader(), "Contact: "+s+"\r\n"; actual != expect {
+		t.Errorf("Not valid Contact WriteHeader(): expect %v, but given '%v'", expect, actual)
 	}
 }
 
@@ -998,6 +1028,20 @@ func TestNewContactHeaders(t *testing.T) {
 	}
 	if actual, expect := len(c.Header), 1; actual != expect {
 		t.Errorf("ContactHeaders Header length is not 1")
+	}
+}
+
+func TestCloneContactHeaders(t *testing.T) {
+	corig := NewContactHeaders()
+	s := "<sip:172.16.0.2:5060>"
+	ParseContacts(s, corig)
+	c := corig.Clone()
+	sipc := c.Header[0]
+	if actual, expect := sipc.String(), s; actual != expect {
+		t.Errorf("Not valid Contact String(): expect %v, but given '%v'", expect, actual)
+	}
+	if actual, expect := c.WriteHeader(), "Contact: "+s+"\r\n"; actual != expect {
+		t.Errorf("Not valid Contact WriteHeader(): expect %v, but given '%v'", expect, actual)
 	}
 }
 

@@ -384,12 +384,14 @@ func (uri *URI) Clone() (cp *URI) {
 	cp = new(URI)
 	cp.Scheme = uri.Scheme
 	cp.Opaque = uri.Opaque
-	user := uri.User.Username()
-	pass, ok := uri.User.Password()
-	if ok {
-		cp.User = url.UserPassword(user, pass)
-	} else {
-		cp.User = url.User(user)
+	if uri.User != nil {
+		user := uri.User.Username()
+		pass, ok := uri.User.Password()
+		if ok {
+			cp.User = url.UserPassword(user, pass)
+		} else {
+			cp.User = url.User(user)
+		}
 	}
 	cp.Host = uri.Host
 	cp.Path = uri.Path

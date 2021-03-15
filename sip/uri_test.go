@@ -325,3 +325,134 @@ func TestUriParameterNoValue(t *testing.T) {
 		t.Errorf("Invalid uri Parameter()")
 	}
 }
+
+func TestUriParseURIwithoutUser(t *testing.T) {
+	uri := "sip:atlanta.com:5060"
+	actual, err := Parse(uri)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+
+	if act, exp := actual.Scheme, "sip"; act != exp {
+		t.Errorf("Invalid uri scheme, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.User.Username(), ""; act != exp {
+		t.Errorf("Invalid Username, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Host, "atlanta.com:5060"; act != exp {
+		t.Errorf("Invalid Username, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Path, ""; act != exp {
+		t.Errorf("Invalid Path, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawPath, ""; act != exp {
+		t.Errorf("Invalid RawPath, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.ForceParameter, false; act != exp {
+		t.Errorf("Invalid ForceParameter, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawParameter, ""; act != exp {
+		t.Errorf("Invalid RawParameter, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.ForceQuery, false; act != exp {
+		t.Errorf("Invalid ForceQuery, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawQuery, ""; act != exp {
+		t.Errorf("Invalid RawQuery, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Absolute, false; act != exp {
+		t.Errorf("Invalid Absolute, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.String(), uri; act != exp {
+		t.Errorf("Invalid uri String(), expect: %v, but actual %v", exp, act)
+	}
+}
+
+func TestCloneURIFull(t *testing.T) {
+	uri := "sip:alice@atlanta.com:5060;user=phone;isub=123?query=hoge"
+	actual, err := Parse(uri)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+	actual = actual.Clone()
+
+	if act, exp := actual.Scheme, "sip"; act != exp {
+		t.Errorf("Invalid uri scheme, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.User.Username(), "alice"; act != exp {
+		t.Errorf("Invalid Username, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Host, "atlanta.com:5060"; act != exp {
+		t.Errorf("Invalid Host, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Path, ""; act != exp {
+		t.Errorf("Invalid Path, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawPath, ""; act != exp {
+		t.Errorf("Invalid RawPath, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.ForceParameter, false; act != exp {
+		t.Errorf("Invalid ForceParameter, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawParameter, "user=phone;isub=123"; act != exp {
+		t.Errorf("Invalid RawParameter, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.ForceQuery, false; act != exp {
+		t.Errorf("Invalid ForceQuery, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawQuery, "query=hoge"; act != exp {
+		t.Errorf("Invalid RawQuery, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Absolute, false; act != exp {
+		t.Errorf("Invalid Absolute, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.String(), uri; act != exp {
+		t.Errorf("Invalid uri String(), expect: %v, but actual %v", exp, act)
+	}
+}
+
+func TestUriCloneURIwithoutUser(t *testing.T) {
+	uri := "sip:atlanta.com:5060"
+	actual, err := Parse(uri)
+	if err != nil {
+		t.Errorf("Unexpected error on test preparing")
+		return
+	}
+	actual = actual.Clone()
+
+	if act, exp := actual.Scheme, "sip"; act != exp {
+		t.Errorf("Invalid uri scheme, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.User.Username(), ""; act != exp {
+		t.Errorf("Invalid Username, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Host, "atlanta.com:5060"; act != exp {
+		t.Errorf("Invalid Username, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Path, ""; act != exp {
+		t.Errorf("Invalid Path, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawPath, ""; act != exp {
+		t.Errorf("Invalid RawPath, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.ForceParameter, false; act != exp {
+		t.Errorf("Invalid ForceParameter, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawParameter, ""; act != exp {
+		t.Errorf("Invalid RawParameter, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.ForceQuery, false; act != exp {
+		t.Errorf("Invalid ForceQuery, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.RawQuery, ""; act != exp {
+		t.Errorf("Invalid RawQuery, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.Absolute, false; act != exp {
+		t.Errorf("Invalid Absolute, expect: %v, but actual %v", exp, act)
+	}
+	if act, exp := actual.String(), uri; act != exp {
+		t.Errorf("Invalid uri String(), expect: %v, but actual %v", exp, act)
+	}
+}
