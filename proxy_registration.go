@@ -49,12 +49,14 @@ type RegistrationOperation struct {
 	Q         int
 }
 
+var register *RegisterController
+
 type RegisterController struct {
 	mu sync.Mutex
 	db *sql.DB
 }
 
-func NewRegiserController() *RegisterController {
+func NewRegisterController() *RegisterController {
 	sqlitePath := "/dev/shm/tj-sip-reg.sqlite"
 
 	_, err := os.Stat(sqlitePath)
@@ -167,7 +169,6 @@ func issueTransaction(aor *sip.URI, operations []*RegistrationOperation,
 	}
 	row.Scan(&dbAor, &dbCallId, &dbSeq)
 	if dbAor != "" {
-		log.Printf("%s, %s, %d", dbAor, dbCallId, dbSeq)
 		if len(operations) > 1 && dbCallId == callId && dbSeq <= cseqNum {
 			dbTxn.Rollback()
 			log.Printf("CSeq and CallID check fail")
@@ -176,6 +177,10 @@ func issueTransaction(aor *sip.URI, operations []*RegistrationOperation,
 	}
 
 	_, err = dbTxn.Exec("DELETE FROM register_seq WHERE aor = ?", aor.String())
+	if err != nil {
+		dbTxn.Rollback()
+		return nil, err
+	}
 	_, err = dbTxn.Exec("INSERT INTO register_seq (aor,callId, seq) VALUES (?, ?, ?)",
 		aor.String(), callId, cseqNum)
 	if err != nil {

@@ -279,7 +279,6 @@ var callGap = callGapControl{enable: false, last: time.Now()}
 var responseContexts *ResponseCtxs
 var timerCHandler *TimerCHandlers
 var callStates *CallStates
-var register *RegisterController
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
@@ -294,6 +293,10 @@ func main() {
 	filepath, ok := os.LookupEnv("TRANSFILE")
 	if !ok {
 		filepath = "routes.csv"
+	}
+	subsFilePath, ok := os.LookupEnv("SUBSFILE")
+	if !ok {
+		subsFilePath = "users.csv"
 	}
 
 	sip.RecieveBufSizeB = 9000
@@ -312,9 +315,13 @@ func main() {
 	responseContexts = NewResponseCtxs()
 	timerCHandler = NewTimerCHandlers()
 	callStates = NewCallStates()
-	register = NewRegiserController()
+	register = NewRegisterController()
+	authenticater = NewAuthController()
 
 	if !loadTranslater(filepath, sip.LogLevel >= sip.LogDebug) {
+		return
+	}
+	if !importSubscriber(subsFilePath) {
 		return
 	}
 

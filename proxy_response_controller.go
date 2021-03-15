@@ -11,24 +11,24 @@ func forwardRedirection(srv *sip.Server, msg *sip.Message, info *callInfo, srvTx
 	if contacts == nil || contacts.Length() == 0 {
 		info.RecordTerminated(msg, TERM_INTERNAL)
 		return makeErrorResponse(srv, srvTxn.Request,
-			srvTxn, sip.StatusNotFound)
+			srvTxn, sip.StatusNotFound, nil)
 	}
 	contact := contacts.Header[0]
 	if contact.Star || contact.Addr == nil || contact.Addr.Uri == nil {
 		info.RecordTerminated(msg, TERM_INTERNAL)
 		return makeErrorResponse(srv, srvTxn.Request,
-			srvTxn, sip.StatusNotFound)
+			srvTxn, sip.StatusNotFound, nil)
 	}
 
 	fwdMsg := info.SentRequest().Clone()
 	if !fwdMsg.MaxForwards.Decrement() {
-		return makeErrorResponse(srv, srvTxn.Request, srvTxn, sip.StatusTooManyHops)
+		return makeErrorResponse(srv, srvTxn.Request, srvTxn, sip.StatusTooManyHops, nil)
 	}
 	fwdMsg.RequestURI = contact.Addr.Uri
 	fwdMsg.Via.Pop()
 	err, status := inviteRouted(fwdMsg)
 	if err != nil {
-		return makeErrorResponse(srv, srvTxn.Request, srvTxn, status)
+		return makeErrorResponse(srv, srvTxn.Request, srvTxn, status, nil)
 	}
 
 	newCT := sip.NewClientInviteTransaction(srv, fwdMsg, clientTransactionErrorHandler)
@@ -39,7 +39,7 @@ func forwardRedirection(srv *sip.Server, msg *sip.Message, info *callInfo, srvTx
 		srv.Warnf("%v", err)
 		newCT.Destroy()
 		return makeErrorResponse(srv, srvTxn.Request,
-			srvTxn, sip.StatusInternalServerError)
+			srvTxn, sip.StatusInternalServerError, nil)
 	}
 	newCT.WriteMessage(fwdMsg)
 	info.RecordCallee(fwdMsg)

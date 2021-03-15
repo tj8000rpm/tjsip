@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"sip/sip"
 	"time"
 )
@@ -28,7 +29,7 @@ func inviteRouted(fwdMsg *sip.Message) (error, int) {
 	return nil, 0
 }
 
-func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int) {
+func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction) (error, int, *http.Header) {
 	from := msg.From
 	// to := msg.To
 
@@ -41,7 +42,14 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 
 	info, ok := callStates.Get(msg.CallID.String())
 	if ok {
-		return sip.ErrStatusError, sip.StatusLoopDetected
+		// This is established call will Reinvite etc
+		//return sip.ErrStatusError, sip.StatusLoopDetected
+	} else {
+		authorized, _ := authMessage("Proxy-Authorization", msg, queryA1md5)
+		if !authorized {
+			generateAuthRequireHeader("Proxy-Authenticate")
+			return sip.ErrStatusError, sip.StatusProxyAuthenticationRequired, nil
+		}
 	}
 	info = NewCallInfo()
 	info.RecordCaller(msg)
@@ -54,18 +62,18 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 		// this message will re-invite
 		fwdMsg, err, status = generateForwardingRequestByRouteHeader(msg)
 		if err != nil {
-			return sip.ErrStatusError, status
+			return sip.ErrStatusError, status, nil
 		}
 	} else {
 		// this message will ini-invite
 		fwdMsg, err, status = generateForwardingRequest(msg)
 		if err != nil {
-			return sip.ErrStatusError, status
+			return sip.ErrStatusError, status, nil
 		}
 
 		err, status = inviteRouted(fwdMsg)
 		if err != nil {
-			return err, status
+			return err, status, nil
 		}
 
 		// Insert Record route header
@@ -86,7 +94,7 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	if err != nil {
 		srv.Warnf("%v", err)
 		clientTxn.Destroy()
-		return sip.ErrStatusError, sip.StatusInternalServerError
+		return sip.ErrStatusError, sip.StatusInternalServerError, nil
 	}
 	clientTxn.WriteMessage(fwdMsg)
 	info.RecordCallee(fwdMsg)
@@ -111,10 +119,10 @@ func inviteHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 	// TODO: decide to handling as subsciber or other server
 	switch lookupTrunkType(msg.RemoteAddr) {
 	case TrunkSubscriber:
-		return nil, 0
+		return nil, 0, nil
 	}
 
-	return nil, 0
+	return nil, 0, nil
 }
 
 func generateForwardingRequest(msg *sip.Message) (*sip.Message, error, int) {
@@ -288,7 +296,7 @@ func cancelHandler(srv *sip.Server, msg *sip.Message, txn *sip.ServerTransaction
 }
 
 func makeErrorResponse(srv *sip.Server, msg *sip.Message,
-	txn *sip.ServerTransaction, status int) error {
+	txn *sip.ServerTransaction, status int, header *http.Header) error {
 
 	rep := msg.GenerateResponseFromRequest()
 	rep.StatusCode = status
@@ -325,9 +333,9 @@ func clientTransactionErrorHandler(txn *sip.ClientTransaction) {
 	if removeSt {
 		switch txn.Err {
 		case sip.ErrTransactionTimedOut:
-			makeErrorResponse(txn.Server, srvTxn.Request, srvTxn, sip.StatusRequestTimeout)
+			makeErrorResponse(txn.Server, srvTxn.Request, srvTxn, sip.StatusRequestTimeout, nil)
 		default:
-			makeErrorResponse(txn.Server, srvTxn.Request, srvTxn, sip.StatusInternalServerError)
+			makeErrorResponse(txn.Server, srvTxn.Request, srvTxn, sip.StatusInternalServerError, nil)
 		}
 	}
 }
@@ -356,10 +364,11 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 
 	err = sip.ErrStatusError
 	status := sip.StatusMethodNotAllowed
+	var addHeader *http.Header
 	switch msg.Method {
 	case sip.MethodINVITE:
 		srv.Debugf("Handle to INVITE\n")
-		err, status = inviteHandler(srv, msg, txn)
+		err, status, addHeader = inviteHandler(srv, msg, txn)
 	case sip.MethodBYE,
 		sip.MethodUPDATE,
 		sip.MethodPRACK:
@@ -379,9 +388,9 @@ func requestHandler(srv *sip.Server, msg *sip.Message) error {
 	case nil:
 		return nil
 	case sip.ErrStatusError:
-		return makeErrorResponse(srv, msg, txn, status)
+		return makeErrorResponse(srv, msg, txn, status, addHeader)
 	default:
-		return makeErrorResponse(srv, msg, txn, sip.StatusInternalServerError)
+		return makeErrorResponse(srv, msg, txn, sip.StatusInternalServerError, addHeader)
 	}
 }
 
